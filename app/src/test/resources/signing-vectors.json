@@ -1,0 +1,52 @@
+{
+  "frict_server_commit": "7b80fe736a33fa9f80f7af241a62d0a884df0dd0",
+  "private_key_pkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg44W68AYvuuzguLz1RX29RT6/0npYoUxQfSczSf5oa2GhRANCAAT5lEP/YHNy1OMrYXCd7V0uTkSHyUqb96IDPIhPPLDYtU5x0DZGq/H4/2dnPiA3qOu4wDr+Z8Lo7GyeCI+6G172",
+  "public_key_spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE+ZRD/2BzctTjK2Fwne1dLk5Eh8lKm/eiAzyITzyw2LVOcdA2Rqvx+P9nZz4gN6jruMA6/mfC6OxsngiPuhte9g==",
+  "vectors": [
+    {
+      "name": "enroll, newlines in body",
+      "user_id": "DUABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "unix_seconds": 1762345678,
+      "path": "/device/v1/enroll",
+      "body": "{\"a\":\n1}\n",
+      "signed_bytes": "ZnJpY3QtZGV2aWNlLXYxCkRVQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoKMTc2MjM0NTY3OAovZGV2aWNlL3YxL2Vucm9sbAp7ImEiOgoxfQo=",
+      "authorization": "Frict-P256 DUABCDEFGHIJKLMNOPQRSTUVWXYZ:1762345678:MEQCICTz8QLv1EKyFX8e3Nk9Yl1FA-9xYoDNtZsl3Uwa3brAAiBztzgopeZO1AT3QPTA5BJEhSrc8voWBtSTFDERO1tl4w"
+    },
+    {
+      "name": "pending, empty object",
+      "user_id": "DU234567234567234567234567AB",
+      "unix_seconds": 1,
+      "path": "/device/v1/pending",
+      "body": "{}",
+      "signed_bytes": "ZnJpY3QtZGV2aWNlLXYxCkRVMjM0NTY3MjM0NTY3MjM0NTY3MjM0NTY3QUIKMQovZGV2aWNlL3YxL3BlbmRpbmcKe30=",
+      "authorization": "Frict-P256 DU234567234567234567234567AB:1:MEUCIQDSb4WvWHwQ4JwvWvsCCRNXbGz5XD32DsnzX6H2IuVOawIgc-6efz6GLNnbmW2rKjt5iBUl0W5NU0TUBv3y5gCmcRU"
+    },
+    {
+      "name": "answer, 12-digit time",
+      "user_id": "DUZZZZZZZZZZZZZZZZZZZZZZZZZZ",
+      "unix_seconds": 999999999999,
+      "path": "/device/v1/answer",
+      "body": "{\"challenge_id\":\"AAAAAAAAAAAAAAAAAAAAAA\",\"decision\":\"deny\",\"reason\":\"not_me\"}",
+      "signed_bytes": "ZnJpY3QtZGV2aWNlLXYxCkRVWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWloKOTk5OTk5OTk5OTk5Ci9kZXZpY2UvdjEvYW5zd2VyCnsiY2hhbGxlbmdlX2lkIjoiQUFBQUFBQUFBQUFBQUFBQUFBQUFBQSIsImRlY2lzaW9uIjoiZGVueSIsInJlYXNvbiI6Im5vdF9tZSJ9",
+      "authorization": "Frict-P256 DUZZZZZZZZZZZZZZZZZZZZZZZZZZ:999999999999:MEUCIEyIFh5sU2a0wxZv5y6DltZhtUCVtLJiK2HLDz3Avs6vAiEAzS9S_J3nkxs8KhRrPNolq8Asiss9HMNK3KUVCMj0u7o"
+    },
+    {
+      "name": "fid, multibyte UTF-8",
+      "user_id": "DUQRSTUVWXYZ234567ABCDEFGHIJ",
+      "unix_seconds": 1762345999,
+      "path": "/device/v1/fid",
+      "body": "{\"fid\":\"fé€𝄞\"}",
+      "signed_bytes": "ZnJpY3QtZGV2aWNlLXYxCkRVUVJTVFVWV1hZWjIzNDU2N0FCQ0RFRkdISUoKMTc2MjM0NTk5OQovZGV2aWNlL3YxL2ZpZAp7ImZpZCI6ImbDqeKCrPCdhJ4ifQ==",
+      "authorization": "Frict-P256 DUQRSTUVWXYZ234567ABCDEFGHIJ:1762345999:MEQCIE1I-cGClry15QkI6XW2QgORpzE3Um2cbpuobXmiLSfWAiBC-WM-hyfG63YrIrPcvhb9iPWL1Ej7i_Lx2TcIlrEl0A"
+    },
+    {
+      "name": "challenge",
+      "user_id": "DUABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      "unix_seconds": 1762345678,
+      "path": "/device/v1/challenge",
+      "body": "{\"challenge_id\":\"AAAAAAAAAAAAAAAAAAAAAA\"}",
+      "signed_bytes": "ZnJpY3QtZGV2aWNlLXYxCkRVQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVoKMTc2MjM0NTY3OAovZGV2aWNlL3YxL2NoYWxsZW5nZQp7ImNoYWxsZW5nZV9pZCI6IkFBQUFBQUFBQUFBQUFBQUFBQUFBQUEifQ==",
+      "authorization": "Frict-P256 DUABCDEFGHIJKLMNOPQRSTUVWXYZ:1762345678:MEUCIQCBqbEnzWR5zjicx_TAlQyHJFk7f7czdiY2YqoOMjwELQIgS2MR2_omeiWoG_oaFDaxo0l7EloJLPuyUo8c859u9r0"
+    }
+  ]
+}
