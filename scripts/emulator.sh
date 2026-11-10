@@ -60,6 +60,11 @@ on_exit() {
 [[ -r /dev/kvm && -w /dev/kvm ]] || { echo "/dev/kvm is not accessible" >&2; exit 1; }
 [[ -d $ANDROID_HOME/${IMAGE//;//} ]] || sdkmanager --install "$IMAGE" <<<"$(printf 'y\n%.0s' {1..20})" >/dev/null
 echo no | avdmanager create avd --force --name "$AVD" --package "$IMAGE" >/dev/null
+# avdmanager and the emulator can disagree on the AVD directory (the runner's
+# avdmanager follows XDG_CONFIG_HOME), so point the emulator where it went.
+avd_path=$(avdmanager list avd | sed -n "s|^ *Path: \(.*/$AVD\.avd\)$|\1|p")
+[[ -n $avd_path ]] || { avdmanager list avd; echo "avdmanager does not list $AVD" >&2; exit 1; }
+export ANDROID_AVD_HOME=${avd_path%/*}
 
 mkdir -p "$ROOT/app/build"
 emulator -avd "$AVD" -port "$PORT" -no-window -no-audio -no-boot-anim -no-snapshot -no-metrics \
