@@ -18,6 +18,8 @@ BOOT_TIMEOUT=${BOOT_TIMEOUT:-300}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 EMULATOR_LOG=$ROOT/app/build/emulator.log
 export ANDROID_SERIAL=emulator-$PORT
+# Newer avdmanager and the emulator default to different AVD directories.
+export ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-$HOME/.android/avd}
 
 # Each adb call is bounded so a wedged device can't hang the capture.
 capture_diagnostics() {
