@@ -9,6 +9,7 @@
 #
 # Usage: scripts/enroll-e2e.sh
 set -Eeuo pipefail
+trap 'echo "$0: line $LINENO: \"$BASH_COMMAND\" failed" >&2' ERR
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-7b80fe736a33fa9f80f7af241a62d0a884df0dd0}
@@ -111,8 +112,11 @@ before=$(duo status "$user_id" "$link")
 adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
 wait_for_text Enroll
 tap_text Enroll
-wait_for_text "Enrolled as $user_id with $API_HOST"
-
-after=$(duo status "$user_id" "$link")
+for ((i = 0; i < 30; i++)); do
+  after=$(duo status "$user_id" "$link")
+  [[ $after == waiting ]] || break
+  sleep 1
+done
 echo "enroll_status after the app enrolled: $after"
 [[ $after == success ]] || { echo "enroll_status after the app enrolled: $after, want success" >&2; exit 1; }
+wait_for_text "Enrolled as $user_id with $API_HOST"

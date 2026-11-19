@@ -8,6 +8,7 @@
 #
 # IMAGE is installed with sdkmanager unless ANDROID_HOME already has it.
 set -Eeuo pipefail
+trap 'echo "$0: line $LINENO: \"$BASH_COMMAND\" failed" >&2' ERR
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
@@ -42,15 +43,14 @@ capture_diagnostics() {
 # Through Settings, as a user would: Keystore only creates the approval_key once
 # a strong biometric is enrolled.
 enroll_fingerprint() {
-  local i
+  local i screen
   wait_unlocked
   adb shell locksettings set-pin "$PIN" >/dev/null
   adb shell am start -a android.settings.FINGERPRINT_ENROLL >/dev/null
-  wait_for_text "Re-enter your PIN"
+  wait_for_text "Re-enter your PIN" 60
   adb shell input text "$PIN"
   adb shell input keyevent KEYCODE_ENTER
-  local screen
-  for ((i = 0; i < 15; i++)); do
+  for ((i = 0; i < 60; i++)); do
     screen=$(ui_dump)
     if grep -qiF 'text="Touch the sensor"' <<<"$screen"; then
       break
@@ -59,9 +59,9 @@ enroll_fingerprint() {
     elif grep -qiF 'text="More"' <<<"$screen"; then
       tap_text More
     fi
-    sleep 1
+    sleep 2
   done
-  wait_for_text "Touch the sensor"
+  wait_for_text "Touch the sensor" 60
   for ((i = 0; i < 10; i++)); do
     screen=$(ui_dump)
     if grep -qiF 'text="Fingerprint added"' <<<"$screen"; then break; fi

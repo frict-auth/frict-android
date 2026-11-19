@@ -16,9 +16,21 @@ adb_root() {
   return 1
 }
 
-# One node per line. Callers grep a variable, not this pipe: grep -q exiting
-# early would fail the pipe under pipefail.
-ui_dump() { adb exec-out uiautomator dump /dev/tty | tr '>' '\n'; }
+# ui_dump: the screen's UI hierarchy, one node per line. uiautomator fails now
+# and then while the screen animates, so retry. Callers grep a variable, not a
+# pipe from this: grep -q exiting early would fail the pipe under pipefail.
+ui_dump() {
+  local i out
+  for ((i = 0; i < 5; i++)); do
+    if out=$(adb exec-out uiautomator dump /dev/tty 2>&1) && [[ $out == *"</hierarchy>"* ]]; then
+      tr '>' '\n' <<<"$out"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "uiautomator dump failed 5 times; last output: $out" >&2
+  return 1
+}
 
 # wait_for_text TEXT [SECONDS]: waits until a node's text is exactly TEXT, ignoring case.
 wait_for_text() {
