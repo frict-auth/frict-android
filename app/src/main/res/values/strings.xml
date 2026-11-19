@@ -1,4 +1,14 @@
 <resources>
     <string name="app_name">Frict</string>
     <string name="not_enrolled">Not enrolled</string>
+    <string name="activation_link">Activation link</string>
+    <string name="enroll">Enroll</string>
+    <string name="enrolled">Enrolled as %1$s with %2$s</string>
+    <string name="already_enrolled">This device is already enrolled.</string>
+    <string name="not_an_activation_link">That is not a Frict activation link.</string>
+    <string name="needs_biometric">Set up a fingerprint or face unlock first: approving a login needs one.</string>
+    <string name="keys_unavailable">Could not create keys: %1$s</string>
+    <string name="enroll_rejected">The server refused the enrollment (HTTP %1$d). The link may be used or expired.</string>
+    <string name="network_error">Could not reach the server: %1$s</string>
+    <string name="not_saved">Enrolled, but the enrollment could not be saved on this device.</string>
 </resources>
