@@ -21,6 +21,35 @@ a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
 
+## Dependencies
+
+Gradle verifies every artifact it resolves, plugins and build tooling
+included, against the sha256 in `gradle/verification-metadata.xml`; an
+unlisted or mismatching artifact fails the build. `app/gradle.lockfile` pins
+the app's runtime and test classpaths, which is what the `vulnerabilities` CI
+job scans with OSV-Scanner. Build tooling is left out of the scan: its
+advisories are fixed by bumping AGP or Kotlin, not here.
+Plugins resolve from Google and Maven Central only: the Gradle Plugin Portal
+serves different bytes for some of the same plugin marker POMs, which would
+fail verification whenever it answered first.
+
+After changing a dependency, regenerate both files:
+
+```
+rm gradle/verification-metadata.xml
+./gradlew --write-verification-metadata sha256 --write-locks --refresh-dependencies \
+  assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest :app:dependencies
+```
+
+The diff of the two files is what the reviewer checks: every new or changed
+artifact, with its checksum.
+
+Dependabot proposes Gradle and Actions updates weekly, once a release is 7
+days old. It updates `gradle.lockfile` but not the verification metadata, so
+its Gradle PRs fail CI until someone runs the command above on the Dependabot
+branch and pushes the result. It doesn't update the OSV-Scanner image either
+(it skips `docker://` references); bump that by hand.
+
 ## Enrollment
 
 The app enrolls from an activation link
