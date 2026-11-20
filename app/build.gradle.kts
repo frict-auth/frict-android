@@ -55,3 +55,9 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
+
+// gradle.lockfile pins what ships and what the tests run; the CI vulnerability
+// scan reads it. Build tooling is covered by gradle/verification-metadata.xml.
+configurations.matching { it.name.endsWith("RuntimeClasspath") }.configureEach {
+    resolutionStrategy.activateDependencyLocking()
+}
