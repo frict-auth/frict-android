@@ -42,7 +42,8 @@ sealed interface PollUpdate {
     data class Failed(val message: String) : PollUpdate
 }
 
-data class Poll(val update: PollUpdate, val nextSeconds: Long)
+/** [alerts] is null when the poll failed. */
+data class Poll(val update: PollUpdate, val nextSeconds: Long, val alerts: List<Alert>?)
 
 sealed interface AnswerResult {
     data class Answered(val answer: Answer) : AnswerResult
@@ -71,14 +72,14 @@ class Approvals(
     fun poll(shownId: String?): Poll {
         val response = post(PENDING_PATH, JSONObject(), deviceSigner)
         val pending = (response as? DeviceResponse.Ok)?.takeIf { it.status == HttpURLConnection.HTTP_OK }?.let(::parsePending)
-            ?: return Poll(PollUpdate.Failed(describe(response)), DEFAULT_POLL_SECONDS)
-        val (ids, next) = pending
+            ?: return Poll(PollUpdate.Failed(describe(response)), DEFAULT_POLL_SECONDS, null)
+        val (ids, next, alerts) = pending
         val update = when {
             shownId != null -> if (shownId in ids) PollUpdate.NoChange else PollUpdate.Withdrawn(shownId)
             ids.isEmpty() -> PollUpdate.NoChange
             else -> fetch(ids.first())
         }
-        return Poll(update, next)
+        return Poll(update, next, alerts)
     }
 
     private fun fetch(id: String): PollUpdate {
@@ -109,10 +110,10 @@ class Approvals(
     }
 }
 
-private fun parsePending(r: DeviceResponse.Ok): Pair<List<String>, Long>? = try {
+private fun parsePending(r: DeviceResponse.Ok): Triple<List<String>, Long, List<Alert>>? = try {
     val json = JSONObject(r.body)
     val ids = json.getJSONArray("challenge_ids").let { a -> List(a.length()) { a.getString(it) } }
-    ids to json.optLong("poll_interval", DEFAULT_POLL_SECONDS).coerceIn(1, 60)
+    Triple(ids, json.optLong("poll_interval", DEFAULT_POLL_SECONDS).coerceIn(1, 60), parseAlerts(json.optJSONArray("alerts")))
 } catch (_: JSONException) {
     null
 }
