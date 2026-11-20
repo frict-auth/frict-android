@@ -32,4 +32,12 @@
     <string name="not_pending">The server says this sign-in request was already answered or has expired.</string>
     <string name="not_found">The server does not know this sign-in request.</string>
     <string name="answer_rejected">The server refused the answer (HTTP %1$d %2$s).</string>
+    <string name="alert_title">Sign-in reported as not theirs</string>
+    <string name="alert_user">Reported by %1$s</string>
+    <string name="alert_attempted">Attempted: %1$s</string>
+    <string name="alert_reported">Reported: %1$s</string>
+    <string name="reset_password">Reset password</string>
+    <string name="revoke_sessions">Revoke sessions</string>
+    <string name="link_not_opened">%1$s (not a web link, not opened): %2$s</string>
+    <string name="no_browser">No browser to open %1$s</string>
 </resources>
