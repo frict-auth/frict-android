@@ -5,6 +5,7 @@ import java.security.KeyPairGenerator
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -63,7 +64,7 @@ class ApprovalsTest {
             created = 1762345678,
             expires = 1762345738,
         )
-        assertEquals(Poll(PollUpdate.Show(expected), 7), approvals.poll(shownId = null))
+        assertEquals(Poll(PollUpdate.Show(expected), 7, emptyList()), approvals.poll(shownId = null))
         assertEquals(listOf(PENDING_PATH, CHALLENGE_PATH), server.requests.map { it.path })
         assertEquals(FIRST, server.requests[1].json.getString("challenge_id"))
     }
@@ -82,7 +83,7 @@ class ApprovalsTest {
 
     @Test
     fun nothingPendingIsNoChange() {
-        assertEquals(Poll(PollUpdate.NoChange, 5), approvals.poll(shownId = null))
+        assertEquals(Poll(PollUpdate.NoChange, 5, emptyList()), approvals.poll(shownId = null))
     }
 
     @Test
@@ -102,13 +103,55 @@ class ApprovalsTest {
     @Test
     fun failedPollSaysWhyAndWaitsTheDefault() {
         server.enrolled(p256().public, approval.public)
-        assertEquals(Poll(PollUpdate.Failed("HTTP 401 unauthorized"), DEFAULT_POLL_SECONDS), approvals.poll(shownId = null))
+        server.addAlert(FIRST)
+        assertEquals(Poll(PollUpdate.Failed("HTTP 401 unauthorized"), DEFAULT_POLL_SECONDS, null), approvals.poll(shownId = null))
     }
 
     @Test
     fun unreachableServerFailsThePoll() {
         server.close()
         assertTrue(approvals.poll(shownId = null).update is PollUpdate.Failed)
+    }
+
+    @Test
+    fun pollListsAlertsOldestFirstFromTheDeviceKeySignedPending() {
+        server.addAlert(FIRST, username = "geoffrey")
+        server.addAlert(SECOND, username = "someone")
+        val url = "https://auth.example/if/admin/#/identity/users;%7B%22ak-user-list-search%22:%22geoffrey%22%7D"
+        val expected = Alert(
+            id = FIRST,
+            username = "geoffrey",
+            ipaddr = "203.0.113.7",
+            pushinfo = listOf("Domain" to "auth.example", "Application" to "Frict test"),
+            type = "authentik Login request",
+            attempted = 1762345678,
+            reported = 1762345690,
+            resetPasswordUrl = url,
+            revokeSessionsUrl = url,
+        )
+        val alerts = approvals.poll(shownId = null).alerts
+        assertEquals(listOf(FIRST, SECOND), alerts?.map { it.id })
+        assertEquals(expected, alerts?.first())
+        val r = server.requests.single()
+        assertEquals(PENDING_PATH, r.path)
+        assertTrue(r.verifiesWith(device.public))
+        assertFalse(r.verifiesWith(approval.public))
+    }
+
+    @Test
+    fun alertsComeWithChallengesInTheSamePoll() {
+        server.addChallenge(FIRST)
+        server.addAlert(SECOND)
+        val poll = approvals.poll(shownId = FIRST)
+        assertEquals(PollUpdate.NoChange, poll.update)
+        assertEquals(listOf(SECOND), poll.alerts?.map { it.id })
+    }
+
+    @Test
+    fun alertsWithoutAnIdAreSkipped() {
+        server.addAlert(FIRST)
+        server.alerts.put(JSONObject().put("username", "nobody")).put("not an object")
+        assertEquals(listOf(FIRST), approvals.poll(shownId = null).alerts?.map { it.id })
     }
 
     @Test

@@ -85,15 +85,16 @@ touch_fingerprint_until_gone() {
   return 1
 }
 
-# hide_keyboard: closes the soft keyboard if it is up, so a tap reaches the app
-# under it.
-hide_keyboard() {
-  local i
-  for ((i = 0; i < 10; i++)); do
-    [[ $(adb shell dumpsys input_method) == *mInputShown=true* ]] || return 0
-    adb shell input keyevent KEYCODE_BACK
-    sleep 1
+# disable_soft_keyboards: the e2e never types, and a soft keyboard covers what
+# it taps. Android keeps an input method enabled, falling back to the next one
+# when the last is disabled, so this disables their packages until none is left.
+disable_soft_keyboards() {
+  local i id ids
+  for ((i = 0; i < 5; i++)); do
+    ids=$(adb shell ime list -s)
+    [[ -n $ids ]] || return 0
+    for id in $ids; do adb shell pm disable-user --user 0 "${id%%/*}" >/dev/null; done
   done
-  echo "the soft keyboard is still up after 10 BACK presses" >&2
+  echo "soft keyboards still enabled: $ids" >&2
   return 1
 }

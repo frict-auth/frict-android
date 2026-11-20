@@ -1,5 +1,6 @@
 package app.frict.android
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -9,12 +10,15 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -28,7 +32,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -44,6 +54,7 @@ class MainActivity : ComponentActivity() {
     private var busy by mutableStateOf(false)
     private var challenge by mutableStateOf<Challenge?>(null)
     private var pollError by mutableStateOf<String?>(null)
+    private var alerts by mutableStateOf<List<Alert>>(emptyList())
 
     /** [challenge]'s ID, for the account thread. */
     @Volatile
@@ -62,8 +73,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
+                    val scroll = rememberScrollState()
                     Column(
-                        Modifier.padding(24.dp),
+                        if (account == null) Modifier.padding(24.dp) else Modifier.verticalScroll(scroll).padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
@@ -115,6 +127,44 @@ class MainActivity : ComponentActivity() {
         challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
         status?.let { Text(it) }
         pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
+        alerts.forEach { AlertCard(it) }
+    }
+
+    @Composable
+    private fun AlertCard(a: Alert) {
+        Text(stringResource(R.string.alert_title), style = MaterialTheme.typography.titleLarge)
+        if (a.username.isNotEmpty()) Text(stringResource(R.string.alert_user, a.username))
+        if (a.ipaddr.isNotEmpty()) Text(stringResource(R.string.request_from, a.ipaddr))
+        a.pushinfo.forEach { (key, value) -> Text(stringResource(R.string.request_field, key, value)) }
+        if (a.type.isNotEmpty()) Text(a.type)
+        Text(stringResource(R.string.alert_attempted, formatTime(a.attempted)))
+        Text(stringResource(R.string.alert_reported, formatTime(a.reported)))
+        AlertLink(stringResource(R.string.reset_password), a.resetPasswordUrl)
+        AlertLink(stringResource(R.string.revoke_sessions), a.revokeSessionsUrl)
+    }
+
+    @Composable
+    private fun AlertLink(label: String, url: String) {
+        val openable = openableLink(url)
+        if (openable == null) {
+            Text(stringResource(R.string.link_not_opened, label, url))
+            return
+        }
+        Text(
+            label,
+            color = MaterialTheme.colorScheme.primary,
+            textDecoration = TextDecoration.Underline,
+            modifier = Modifier.clickable { openInBrowser(openable) },
+        )
+    }
+
+    private fun openInBrowser(url: String) {
+        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
+        try {
+            startActivity(intent)
+        } catch (_: ActivityNotFoundException) {
+            status = getString(R.string.no_browser, url)
+        }
     }
 
     @Composable
@@ -149,7 +199,12 @@ class MainActivity : ComponentActivity() {
     private fun poll(generation: Int) {
         if (generation != pollGeneration.get()) return
         val result = PrefsAccountStore(applicationContext).load()?.let { approvals(it).poll(shownId) }
-        result?.let { runOnUiThread { apply(it.update) } }
+        result?.let {
+            runOnUiThread {
+                apply(it.update)
+                it.alerts?.let { shown -> alerts = shown }
+            }
+        }
         accountThread.schedule({ poll(generation) }, result?.nextSeconds ?: DEFAULT_POLL_SECONDS, TimeUnit.SECONDS)
     }
 
@@ -275,3 +330,7 @@ class MainActivity : ComponentActivity() {
 private fun hasStrongBiometric(context: Context): Boolean =
     context.getSystemService(BiometricManager::class.java)
         .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+
+private val timeFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault())
+
+private fun formatTime(unixSeconds: Long): String = timeFormat.format(Instant.ofEpochSecond(unixSeconds))

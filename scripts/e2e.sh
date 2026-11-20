@@ -12,6 +12,8 @@
 # 3. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
 #    pushes after the fraud report.
+# 4. Alert: the e2e user is its own alert recipient, so its poll must list the
+#    fraud report, with both Authentik links tappable.
 #
 # Needs docker and a booted, rootable emulator in ANDROID_SERIAL with a strong
 # biometric enrolled (scripts/emulator.sh does both).
@@ -86,7 +88,7 @@ docker run -d --name "$NAME-server" --network "$NAME" --network-alias frict-serv
   --tmpfs /data:uid=65532,gid=65532,mode=0700 -v "$secrets":/secrets:ro \
   -e FRICT_API_HOSTNAME=$API_HOST -e FRICT_CLIENT_ID=$CLIENT_ID \
   -e FRICT_CLIENT_SECRET_FILE=/secrets/duo-client-secret -e FRICT_DB_PATH=/data/frict.db \
-  -e FRICT_AUTHENTIK_URL=http://127.0.0.1:9000 "$NAME" >/dev/null
+  -e FRICT_AUTHENTIK_URL=http://127.0.0.1:9000 -e FRICT_ALERT_RECIPIENTS=android-e2e "$NAME" >/dev/null
 docker run -d --name "$NAME-tls" --network "$NAME" -p 127.0.0.1:443:443 \
   -v "$secrets":/secrets:ro -v "$work/tls.conf":/etc/nginx/conf.d/default.conf:ro \
   docker.io/library/nginx:1.29.3-alpine@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14 >/dev/null
@@ -119,9 +121,9 @@ echo "activation for $user_id"
 before=$(duo status "$user_id" "$link")
 [[ $before == waiting ]] || { echo "enroll_status before the app enrolled: $before, want waiting" >&2; exit 1; }
 
+disable_soft_keyboards
 adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
 wait_for_text Enroll
-hide_keyboard
 tap_text Enroll
 for ((i = 0; i < 30; i++)); do
   after=$(duo status "$user_id" "$link")
@@ -161,3 +163,12 @@ paused=$(duo auth "$user_id" android-e2e)
 echo "/auth after the fraud report: $paused"
 [[ $paused == "deny locked_out: Pushes paused"* ]] ||
   { echo "/auth after the fraud report: $paused, want deny locked_out: Pushes paused…" >&2; exit 1; }
+
+wait_for_text "Sign-in reported as not theirs" 30
+wait_for_text "Reported by android-e2e"
+for link in "Reset password" "Revoke sessions"; do
+  wait_for_text "$link"
+  node=$(grep -m1 -iF "text=\"$link\"" <<<"$(ui_dump)")
+  [[ $node == *'clickable="true"'* ]] || { echo "\"$link\" is on screen but not tappable: $node" >&2; exit 1; }
+done
+echo "alert shown with tappable links"
