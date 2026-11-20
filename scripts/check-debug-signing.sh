@@ -8,9 +8,11 @@ apksigner=$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -n1)
 
 want=$(keytool -exportcert -keystore app/debug.keystore -storepass android -alias androiddebugkey \
   | sha256sum | cut -d' ' -f1)
-got=$("$apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')
+out=$("$apksigner" verify --print-certs "$apk")
+got=$(sed -n 's/.*certificate SHA-256 digest: //p' <<<"$out" | sort -u)
 
 if [[ "$got" != "$want" ]]; then
+  echo "$out" >&2
   echo "$apk is signed by SHA-256 '$got', expected app/debug.keystore's $want" >&2
   exit 1
 fi
