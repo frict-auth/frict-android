@@ -11,4 +11,25 @@
     <string name="enroll_rejected">The server refused the enrollment (HTTP %1$d). The link may be used or expired.</string>
     <string name="network_error">Could not reach the server: %1$s</string>
     <string name="not_saved">Enrolled, but the enrollment could not be saved on this device.</string>
+    <string name="no_requests">No sign-in requests</string>
+    <string name="poll_failed">Could not check for sign-in requests: %1$s</string>
+    <string name="sign_in_request">Sign-in request</string>
+    <string name="request_user">User: %1$s</string>
+    <string name="request_from">From: %1$s</string>
+    <string name="request_field">%1$s: %2$s</string>
+    <string name="approve">Approve</string>
+    <string name="deny">Deny</string>
+    <string name="not_me">Not me</string>
+    <string name="back">Back</string>
+    <string name="confirm_approve">Approve this sign-in</string>
+    <string name="confirm_deny">Deny this sign-in</string>
+    <string name="confirm_not_me">Report this sign-in as not you</string>
+    <string name="approval_key_unavailable">Cannot use the approval key: %1$s</string>
+    <string name="approved">Approved.</string>
+    <string name="denied">Denied.</string>
+    <string name="reported">Denied and reported as not you.</string>
+    <string name="request_withdrawn">The sign-in request is no longer pending.</string>
+    <string name="not_pending">The server says this sign-in request was already answered or has expired.</string>
+    <string name="not_found">The server does not know this sign-in request.</string>
+    <string name="answer_rejected">The server refused the answer (HTTP %1$d %2$s).</string>
 </resources>

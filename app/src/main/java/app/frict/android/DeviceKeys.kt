@@ -80,4 +80,18 @@ fun keystoreSigner(alias: String) = Signer { data ->
     }
 }
 
+/**
+ * A Signature over the approval_key for a BiometricPrompt CryptoObject. Keystore lets it
+ * sign once, and only after that prompt succeeds.
+ */
+fun approvalSignature(): Signature = Signature.getInstance("SHA256withECDSA").apply {
+    initSign(keyStore().getKey(APPROVAL_KEY_ALIAS, null) as PrivateKey)
+}
+
+/** Signs once with an authenticated [Signature], such as a BiometricPrompt result's. */
+fun Signature.asSigner() = Signer { data ->
+    update(data)
+    sign()
+}
+
 private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }

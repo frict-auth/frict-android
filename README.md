@@ -10,14 +10,15 @@ Needs JDK 21 and an Android SDK in `ANDROID_HOME`.
 
 ```
 ./gradlew assembleDebug testDebugUnitTest lintDebug
-scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the enrollment e2e
+scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the e2e
 ```
 
 The emulator gets a PIN and an enrolled fingerprint first: Keystore creates
-the `approval_key` only once a strong biometric is enrolled. The enrollment
-e2e (`scripts/enroll-e2e.sh`, needs docker) runs frict-server at a pinned
-commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the emulator
-reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
+the `approval_key` only once a strong biometric is enrolled. The e2e
+(`scripts/e2e.sh`, needs docker) enrolls, approves a login and denies one as
+"not me", driving the app and the fingerprint sensor. It runs frict-server at
+a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
+emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
 
 ## Enrollment
@@ -28,6 +29,17 @@ opened as a link or pasted. It creates the `device_key` and `approval_key`
 with the activation code as attestation challenge, sends the enroll request
 signed with the `device_key`, and saves the user once the server accepts it.
 Until push lands, it sends the placeholder FID `no-fid-yet`.
+
+## Approving a login
+
+While the app is open and enrolled, it polls `pending` at the server's
+`poll_interval`, signed with the `device_key`, and shows the oldest pending
+challenge's details (user, IP address, Authentik's pushinfo). Approve, Deny
+(`cancel`) and Not me (`not_me`) each open a BiometricPrompt that allows only
+a strong biometric and is bound to a `Signature` over the `approval_key`;
+Keystore lets that key sign only after the prompt succeeds, and only the
+answer is signed with it. An answer the server refuses as already answered or
+expired is shown as such, not retried.
 
 ## Debug keystore
 

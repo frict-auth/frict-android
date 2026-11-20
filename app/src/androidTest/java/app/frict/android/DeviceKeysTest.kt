@@ -8,6 +8,7 @@ import java.security.KeyFactory
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.Signature
+import java.security.SignatureException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
@@ -15,6 +16,7 @@ import java.security.spec.X509EncodedKeySpec
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -92,5 +94,12 @@ class DeviceKeysTest {
                 verify(signature)
             },
         )
+    }
+
+    @Test
+    fun approvalKeySignsNothingWithoutTheBiometricPrompt() {
+        KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE)
+        val signer = approvalSignature().asSigner()
+        assertThrows(SignatureException::class.java) { signer.sign("frict-device-v1".toByteArray()) }
     }
 }
