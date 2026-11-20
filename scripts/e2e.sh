@@ -1,13 +1,22 @@
 #!/usr/bin/env bash
-# Enrollment e2e against a real frict-server: runs frict-server at
-# FRICT_SERVER_COMMIT behind TLS from a throwaway test CA on 127.0.0.1:443,
-# which the emulator reaches as 10.0.2.2. It creates an activation the way
-# Authentik does (Duo-signed /auth/v2/enroll), opens the link in the debug app,
-# taps Enroll, and requires /auth/v2/enroll_status to go from waiting to
-# success. Needs docker and a booted, rootable emulator in ANDROID_SERIAL with
-# a strong biometric enrolled (scripts/emulator.sh does both).
+# The app against a real frict-server, which runs at FRICT_SERVER_COMMIT
+# behind TLS from a throwaway test CA on 127.0.0.1:443, which the emulator
+# reaches as 10.0.2.2. Every server call is Duo-signed, as Authentik makes it.
 #
-# Usage: scripts/enroll-e2e.sh
+# 1. Enroll: creates an activation (/auth/v2/enroll), opens the link in the
+#    debug app, taps Enroll, and requires /auth/v2/enroll_status to go from
+#    waiting to success.
+# 2. Approve: starts a login (/auth/v2/auth), requires the app to show its
+#    details before any fingerprint, taps Approve, touches the fingerprint
+#    sensor, and requires /auth to return allow.
+# 3. Not me: the same, denied with "Not me": /auth must return deny with status
+#    fraud, and the next /auth must be refused because the server paused
+#    pushes after the fraud report.
+#
+# Needs docker and a booted, rootable emulator in ANDROID_SERIAL with a strong
+# biometric enrolled (scripts/emulator.sh does both).
+#
+# Usage: scripts/e2e.sh
 set -Eeuo pipefail
 trap 'echo "$0: line $LINENO: \"$BASH_COMMAND\" failed" >&2' ERR
 
@@ -26,6 +35,7 @@ work=$(mktemp -d)
 cleanup() {
   local status=$?
   set +e
+  jobs -p | xargs -r kill
   mkdir -p "$DIAGNOSTICS_DIR"
   docker logs "$NAME-server" >"$DIAGNOSTICS_DIR/frict-server.log" 2>&1
   docker logs "$NAME-tls" >"$DIAGNOSTICS_DIR/frict-tls.log" 2>&1
@@ -40,12 +50,12 @@ src=$work/frict-server
 git init -q "$src"
 git -C "$src" fetch -q --depth 1 https://github.com/frict-auth/frict-server.git "$FRICT_SERVER_COMMIT"
 git -C "$src" checkout -q FETCH_HEAD
-mkdir "$src/cmd/enroll-e2e"
-cp "$ROOT/scripts/enroll-e2e/main.go" "$src/cmd/enroll-e2e/"
+mkdir "$src/cmd/duo"
+cp "$ROOT/scripts/duo/main.go" "$src/cmd/duo/"
 docker build -q -t "$NAME" -f "$src/e2e/frict-server.Dockerfile" "$src" >/dev/null
 docker run --rm -v "$src":/src -v "$work":/out -w /src -u "$(id -u):$(id -g)" \
   -e HOME=/tmp -e GOCACHE=/tmp/gocache -e CGO_ENABLED=0 \
-  golang:1.27.3 go build -o /out/enroll-e2e ./cmd/enroll-e2e
+  golang:1.27.3 go build -o /out/duo ./cmd/duo
 
 secrets=$work/secrets
 mkdir "$secrets"
@@ -89,7 +99,7 @@ echo
 
 duo() {
   E2E_HOST=$API_HOST E2E_ADDR=127.0.0.1:443 E2E_CA=$secrets/ca.pem E2E_IKEY=$CLIENT_ID \
-    E2E_SKEY_FILE=$secrets/duo-client-secret "$work/enroll-e2e" "$@"
+    E2E_SKEY_FILE=$secrets/duo-client-secret "$work/duo" "$@"
 }
 
 # Android trusts user-added CAs from this directory, named by OpenSSL's old subject hash.
@@ -111,6 +121,7 @@ before=$(duo status "$user_id" "$link")
 
 adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
 wait_for_text Enroll
+hide_keyboard
 tap_text Enroll
 for ((i = 0; i < 30; i++)); do
   after=$(duo status "$user_id" "$link")
@@ -120,3 +131,33 @@ done
 echo "enroll_status after the app enrolled: $after"
 [[ $after == success ]] || { echo "enroll_status after the app enrolled: $after, want success" >&2; exit 1; }
 wait_for_text "Enrolled as $user_id with $API_HOST"
+
+# login ANSWER_BUTTON PROMPT_TITLE WANT: starts a login, waits for the app to
+# show it, answers it with the fingerprint, and requires /auth's
+# "<result> <status>: <status_msg>" to start with WANT.
+login() {
+  local out=$work/auth-$RANDOM pid got
+  duo auth "$user_id" android-e2e >"$out" &
+  pid=$!
+  # The details must be on screen before anything asks for a fingerprint.
+  wait_for_text "Sign-in request" 60
+  wait_for_text "User: android-e2e"
+  wait_for_text "From: 203.0.113.7"
+  wait_for_text "Application: Frict Android e2e"
+  tap_text "$1"
+  wait_for_text "$2"
+  touch_fingerprint_until_gone "$2"
+  wait "$pid"
+  got=$(<"$out")
+  echo "/auth after $1: $got"
+  [[ $got == "$3"* ]] || { echo "/auth after $1: $got, want $3" >&2; exit 1; }
+}
+
+login Approve "Approve this sign-in" "allow allow:"
+wait_for_text "Approved."
+login "Not me" "Report this sign-in as not you" "deny fraud:"
+wait_for_text "Denied and reported as not you."
+paused=$(duo auth "$user_id" android-e2e)
+echo "/auth after the fraud report: $paused"
+[[ $paused == "deny locked_out: Pushes paused"* ]] ||
+  { echo "/auth after the fraud report: $paused, want deny locked_out: Pushes paused…" >&2; exit 1; }

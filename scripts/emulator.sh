@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Boots a headless emulator, gives it a PIN and an enrolled fingerprint, runs
-# the instrumented tests and the enrollment e2e (scripts/enroll-e2e.sh) on it,
+# the instrumented tests and the e2e (scripts/e2e.sh) on it,
 # and stops it. On failure it saves the screen, a screenshot and logcat to
 # DIAGNOSTICS_DIR.
 #
@@ -38,43 +38,64 @@ capture_diagnostics() {
   echo "diagnostics saved to $DIAGNOSTICS_DIR" >&2
 }
 
-# `adb emu kill` can answer OK and leave the emulator running, so wait for it
-# and escalate.
 # Through Settings, as a user would: Keystore only creates the approval_key once
-# a strong biometric is enrolled.
+# a strong biometric is enrolled. Right after boot Settings can stall or stop
+# responding, so a stalled attempt starts it over, and success is the
+# fingerprint service's own count, not what the screen shows.
 enroll_fingerprint() {
-  local i screen
+  local attempt screen
   wait_unlocked
   adb shell locksettings set-pin "$PIN" >/dev/null
-  adb shell am start -a android.settings.FINGERPRINT_ENROLL >/dev/null
-  wait_for_text "Re-enter your PIN" 60
-  adb shell input text "$PIN"
-  adb shell input keyevent KEYCODE_ENTER
-  for ((i = 0; i < 60; i++)); do
+  for ((attempt = 1; attempt <= 3; attempt++)); do
+    if fingerprint_enroll_attempt; then
+      adb shell am force-stop com.android.settings
+      adb shell input keyevent KEYCODE_HOME
+      return 0
+    fi
+    echo "fingerprint enrollment attempt $attempt stalled; restarting Settings" >&2
     screen=$(ui_dump)
-    if grep -qiF 'text="Touch the sensor"' <<<"$screen"; then
-      break
+    grep -o 'text="[^"]\+"' <<<"$screen" >&2 || echo "the screen shows no text" >&2
+    adb shell am force-stop com.android.settings
+  done
+  echo "no fingerprint enrolled in 3 attempts" >&2
+  return 1
+}
+
+fingerprint_enrolled() {
+  [[ $(adb shell dumpsys fingerprint) =~ \"count\":[1-9] ]]
+}
+
+# One pass through Settings' enrollment screens, answering whichever is up,
+# until a fingerprint is enrolled or 90 s pass.
+fingerprint_enroll_attempt() {
+  local screen pin_entered='' sensing='' deadline=$((SECONDS + 90))
+  adb shell am start -a android.settings.FINGERPRINT_ENROLL >/dev/null
+  while ((SECONDS < deadline)); do
+    fingerprint_enrolled && return 0
+    screen=$(ui_dump) || return 1
+    if grep -qiF "isn't responding\"" <<<"$screen"; then
+      tap_text Wait
+    elif [[ -z $pin_entered ]] && grep -qiF 'text="Re-enter your PIN"' <<<"$screen"; then
+      adb shell input text "$PIN"
+      adb shell input keyevent KEYCODE_ENTER
+      pin_entered=1
     elif grep -qiF 'text="I agree"' <<<"$screen"; then
       tap_text "I agree"
     elif grep -qiF 'text="More"' <<<"$screen"; then
       tap_text More
+    elif [[ -n $sensing ]] || grep -qiF 'text="Touch the sensor"' <<<"$screen"; then
+      sensing=1
+      adb emu finger touch 1 >/dev/null
+      sleep 0.5
+      adb emu finger remove 1 >/dev/null
     fi
-    sleep 2
-  done
-  wait_for_text "Touch the sensor" 60
-  for ((i = 0; i < 10; i++)); do
-    screen=$(ui_dump)
-    if grep -qiF 'text="Fingerprint added"' <<<"$screen"; then break; fi
-    adb emu finger touch 1 >/dev/null
-    sleep 0.5
-    adb emu finger remove 1 >/dev/null
     sleep 1
   done
-  wait_for_text "Fingerprint added"
-  tap_text Done
-  adb shell input keyevent KEYCODE_HOME
+  return 1
 }
 
+# `adb emu kill` can answer OK and leave the emulator running, so wait for it
+# and escalate.
 stop_emulator() {
   [[ -n ${emu_pid:-} ]] || return 0
   adb emu kill >/dev/null 2>&1 || echo "adb emu kill failed; signalling the emulator" >&2
@@ -127,4 +148,4 @@ enroll_fingerprint
 echo "fingerprint enrolled"
 
 (cd "$ROOT" && ./gradlew connectedDebugAndroidTest --console=plain)
-"$ROOT/scripts/enroll-e2e.sh"
+"$ROOT/scripts/e2e.sh"

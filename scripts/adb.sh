@@ -68,3 +68,32 @@ wait_unlocked() {
   echo "the keyguard is still showing after 60s" >&2
   return 1
 }
+
+# touch_fingerprint_until_gone TEXT: touches the emulator's fingerprint sensor
+# with the enrolled finger until TEXT (a biometric prompt's) leaves the screen.
+touch_fingerprint_until_gone() {
+  local i screen
+  for ((i = 0; i < 10; i++)); do
+    screen=$(ui_dump)
+    if ! grep -qiF "text=\"$1\"" <<<"$screen"; then return 0; fi
+    adb emu finger touch 1 >/dev/null
+    sleep 0.5
+    adb emu finger remove 1 >/dev/null
+    sleep 1
+  done
+  echo "\"$1\" is still on screen after 10 fingerprint touches" >&2
+  return 1
+}
+
+# hide_keyboard: closes the soft keyboard if it is up, so a tap reaches the app
+# under it.
+hide_keyboard() {
+  local i
+  for ((i = 0; i < 10; i++)); do
+    [[ $(adb shell dumpsys input_method) == *mInputShown=true* ]] || return 0
+    adb shell input keyevent KEYCODE_BACK
+    sleep 1
+  done
+  echo "the soft keyboard is still up after 10 BACK presses" >&2
+  return 1
+}
