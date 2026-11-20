@@ -29,6 +29,9 @@ unlisted or mismatching artifact fails the build. `app/gradle.lockfile` pins
 the app's runtime and test classpaths, which is what the `vulnerabilities` CI
 job scans with OSV-Scanner. Build tooling is left out of the scan: its
 advisories are fixed by bumping AGP or Kotlin, not here.
+Plugins resolve from Google and Maven Central only: the Gradle Plugin Portal
+serves different bytes for some of the same plugin marker POMs, which would
+fail verification whenever it answered first.
 
 After changing a dependency, regenerate both files:
 
