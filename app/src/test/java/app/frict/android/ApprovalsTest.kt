@@ -214,4 +214,41 @@ class ApprovalsTest {
         assertEquals(listOf("Domain" to "a b", "Application" to "x&y"), parsePushinfo("Domain=a+b&Application=x%26y"))
         assertEquals(emptyList<Pair<String, String>>(), parsePushinfo(""))
     }
+
+    @Test
+    fun fidIsSentSignedWithTheDeviceKey() {
+        assertEquals(FidResult.Sent, approvals.sendFid("fid-from-firebase"))
+        assertEquals("fid-from-firebase", server.fid)
+        val request = server.requests.single()
+        assertEquals(FID_PATH, request.path)
+        assertEquals(setOf("fid"), request.json.fields())
+        assertTrue(request.verifiesWith(device.public))
+        assertFalse(request.verifiesWith(approval.public))
+    }
+
+    @Test
+    fun refusedFidSaysWhy() {
+        assertEquals(FidResult.Rejected(400, "bad_request"), approvals.sendFid(""))
+        assertEquals(null, server.fid)
+    }
+
+    @Test
+    fun openFetchesThePushedChallengeFromTheServer() {
+        server.addChallenge(FIRST, username = "geoffrey")
+        server.addChallenge(SECOND, username = "someone")
+        val update = approvals.open(SECOND)
+        assertEquals("someone", (update as PollUpdate.Show).challenge.username)
+        assertEquals("203.0.113.7", update.challenge.ipaddr)
+        assertEquals(listOf("Domain" to "auth.example", "Application" to "Frict test"), update.challenge.pushinfo)
+        val request = server.requests.single()
+        assertEquals(CHALLENGE_PATH, request.path)
+        assertEquals(SECOND, request.json.getString("challenge_id"))
+        assertTrue(request.verifiesWith(device.public))
+    }
+
+    @Test
+    fun openingAChallengeNoLongerPendingShowsNothing() {
+        server.addChallenge(FIRST, state = ChallengeState.APPROVED)
+        assertEquals(PollUpdate.NoChange, approvals.open(FIRST))
+    }
 }

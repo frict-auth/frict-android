@@ -8,6 +8,7 @@ import org.json.JSONObject
 const val PENDING_PATH = "/device/v1/pending"
 const val CHALLENGE_PATH = "/device/v1/challenge"
 const val ANSWER_PATH = "/device/v1/answer"
+const val FID_PATH = "/device/v1/fid"
 
 /** Until the server sets one; also the wait after a failed poll. */
 const val DEFAULT_POLL_SECONDS = 5L
@@ -57,10 +58,16 @@ sealed interface AnswerResult {
     data class NetworkError(val message: String) : AnswerResult
 }
 
+sealed interface FidResult {
+    data object Sent : FidResult
+    data class Rejected(val status: Int, val error: String) : FidResult
+    data class NetworkError(val message: String) : FidResult
+}
+
 /**
- * The enrolled device's side of a login: polls and fetches with the device_key; answers
- * only with a signer the caller got from a biometric prompt over the approval_key.
- * Calls block.
+ * The enrolled device's requests: polls, fetches and FID updates with the device_key;
+ * answers only with a signer the caller got from a biometric prompt over the
+ * approval_key. Calls block.
  */
 class Approvals(
     private val account: Account,
@@ -80,6 +87,16 @@ class Approvals(
             else -> fetch(ids.first())
         }
         return Poll(update, next, alerts)
+    }
+
+    /** Challenge [id], as a push names it: its details come from the server, never the push. */
+    fun open(id: String): PollUpdate = fetch(id)
+
+    /** Tells the server to push to [fid] from now on. */
+    fun sendFid(fid: String): FidResult = when (val response = post(FID_PATH, JSONObject().put("fid", fid), deviceSigner)) {
+        is DeviceResponse.NetworkError -> FidResult.NetworkError(response.message)
+        is DeviceResponse.Ok ->
+            if (response.status == HttpURLConnection.HTTP_OK) FidResult.Sent else FidResult.Rejected(response.status, errorCode(response.body))
     }
 
     private fun fetch(id: String): PollUpdate {

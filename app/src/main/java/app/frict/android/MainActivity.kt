@@ -1,5 +1,6 @@
 package app.frict.android
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -39,13 +40,8 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-
-/** One thread for every account operation, so no two touch the keys or the store at once. */
-private val accountThread: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
 class MainActivity : ComponentActivity() {
     private var link by mutableStateOf("")
@@ -66,10 +62,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         takeLink(intent)
+        takeChallenge(intent)
         accountThread.execute {
             val saved = PrefsAccountStore(applicationContext).load()
-            runOnUiThread { account = saved }
+            runOnUiThread { enrolled(saved) }
         }
+        startPush(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
@@ -100,10 +98,29 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         takeLink(intent)
+        takeChallenge(intent)
     }
 
     private fun takeLink(intent: Intent?) {
         if (intent?.action == Intent.ACTION_VIEW) intent.dataString?.let { link = it }
+    }
+
+    /** A login notification's challenge: fetched from the server and shown. */
+    private fun takeChallenge(intent: Intent?) {
+        val id = intent?.getStringExtra(EXTRA_CHALLENGE_ID) ?: return
+        intent.removeExtra(EXTRA_CHALLENGE_ID)
+        accountThread.execute {
+            val update = PrefsAccountStore(applicationContext).load()?.let { approvals(it).open(id) }
+            update?.let { runOnUiThread { apply(it) } }
+        }
+    }
+
+    /** Pushes are shown as notifications, so ask for them once there is an account to push to. */
+    private fun enrolled(saved: Account?) {
+        account = saved
+        if (saved != null && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
     }
 
     @Composable
@@ -187,13 +204,6 @@ class MainActivity : ComponentActivity() {
         challenge = c
         shownId = c?.id
     }
-
-    private fun approvals(account: Account) = Approvals(
-        account = account,
-        api = DeviceApi("https://${account.host}"),
-        deviceSigner = keystoreSigner(DEVICE_KEY_ALIAS),
-        unixSeconds = { System.currentTimeMillis() / 1000 },
-    )
 
     /** On the account thread: one poll, then the next after the server's interval. */
     private fun poll(generation: Int) {
@@ -300,7 +310,7 @@ class MainActivity : ComponentActivity() {
             keys = KeystoreKeyMaker(packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)),
             store = PrefsAccountStore(applicationContext),
             api = { host -> DeviceApi("https://$host") },
-            fid = { NO_FID_YET },
+            fid = { currentFid(applicationContext) ?: NO_FID },
             unixSeconds = { System.currentTimeMillis() / 1000 },
         )
         accountThread.execute {
@@ -308,7 +318,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 busy = false
                 when (result) {
-                    is EnrollResult.Enrolled -> account = result.account
+                    is EnrollResult.Enrolled -> enrolled(result.account)
                     else -> status = describe(result)
                 }
             }
