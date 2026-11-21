@@ -1,5 +1,6 @@
 package app.frict.android
 
+import android.annotation.SuppressLint
 import android.content.Context
 
 private const val PREFS = "account"
@@ -15,6 +16,8 @@ class PrefsAccountStore(context: Context) : AccountStore {
         return Account(host, userId)
     }
 
+    // The KTX edit {} discards commit()'s result, which save reports.
+    @SuppressLint("UseKtx")
     override fun save(account: Account): Boolean =
         prefs.edit().putString(KEY_HOST, account.host).putString(KEY_USER_ID, account.userId).commit()
 }
