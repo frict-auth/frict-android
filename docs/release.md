@@ -41,7 +41,7 @@ and the password in the password manager; never in a repo. A lost or leaked
 upload key is reset through Play support; the app signing key, held by Google,
 is unaffected.
 
-The upload key's fingerprints, for step 5:
+The upload key's fingerprints, for step 6:
 
 ```
 keytool -list -v -keystore frict-upload.jks -alias upload | grep -E 'SHA1|SHA256'
@@ -92,27 +92,39 @@ certificates; the upload key's must match step 1's.
 
 ### 5. Release service account
 
-Project `dev-frict-auth` (number 722552623873), whose WIF pool
-`github-actions` / provider `github` already admits frict-android's
-`repository_id` for the live-FCM jobs; its condition stays as it is. The
-binding below admits only jobs in the `release` environment, i.e. on `main`.
+In the prod project. The provider admits only frict-android's
+`repository_id`; the binding admits only jobs in the `release` environment,
+i.e. on `main`.
 
 ```
-P=dev-frict-auth
+P=<prod-project-id>
 SA=frict-play-release@$P.iam.gserviceaccount.com
-gcloud iam workload-identity-pools providers describe github --project=$P \
+gcloud projects describe $P --format='value(projectNumber)'
+N=<prod-project-number>
+POOL=projects/$N/locations/global/workloadIdentityPools/github-actions
+
+gcloud services enable iam.googleapis.com iamcredentials.googleapis.com \
+  sts.googleapis.com androidpublisher.googleapis.com --project=$P
+gcloud iam workload-identity-pools create github-actions --project=$P \
+  --location=global --display-name="GitHub Actions"
+gcloud iam workload-identity-pools providers create-oidc github --project=$P \
   --location=global --workload-identity-pool=github-actions \
-  --format='value(attributeMapping,attributeCondition)'
-gcloud services enable androidpublisher.googleapis.com --project=$P
+  --issuer-uri=https://token.actions.githubusercontent.com \
+  --attribute-mapping=google.subject=assertion.sub,attribute.repository_id=assertion.repository_id \
+  --attribute-condition="assertion.repository_id=='1440746369'"
 gcloud iam service-accounts create frict-play-release --project=$P \
   --display-name="Frict Play release (GitHub Actions)"
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$P \
   --role=roles/iam.workloadIdentityUser \
-  --member="principal://iam.googleapis.com/projects/722552623873/locations/global/workloadIdentityPools/github-actions/subject/repo:frict-auth/frict-android:environment:release"
+  --member="principal://iam.googleapis.com/$POOL/subject/repo:frict-auth/frict-android:environment:release"
+
+R=frict-auth/frict-android
+gh variable set PLAY_WIF_PROVIDER --env release -R $R --body "$POOL/providers/github"
+gh variable set PLAY_SERVICE_ACCOUNT --env release -R $R --body "$SA"
+gh variable list --env release -R $R
 ```
 
-The `describe` output must map `google.subject=assertion.sub`; the member
-above is that subject for a job in the `release` environment.
+The `play` job fails before authenticating while either variable is empty.
 
 Play Console → Users and permissions → Invite new users: `$SA`, app
 permissions for Frict only, "Release apps to testing tracks".
@@ -124,7 +136,7 @@ In the prod project, restrict the release Android API key to
 integrity) or the upload key (step 1), and to the APIs FCM needs:
 
 ```
-gcloud services api-keys update <key-id> --project=<prod-project> \
+gcloud services api-keys update <key-id> --project=<prod-project-id> \
   --allowed-application=sha1_fingerprint=<app-signing-SHA1>,package_name=app.frict.android \
   --allowed-application=sha1_fingerprint=<upload-SHA1>,package_name=app.frict.android \
   --api-target=service=fcmregistrations.googleapis.com \
