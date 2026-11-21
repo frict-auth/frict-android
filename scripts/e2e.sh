@@ -6,6 +6,9 @@
 # 1. Enroll: creates an activation (/auth/v2/enroll), opens the link in the
 #    debug app, picks MODE's unlock, taps Enroll, and requires
 #    /auth/v2/enroll_status to go from waiting to success.
+#    The server must hold the app's Firebase Installation ID, registered with
+#    Firebase (which the dev API key's package and certificate restriction
+#    allows), and get it again on the app's next start.
 # 2. Approve: starts a login (/auth/v2/auth), requires the app to show its
 #    details before the prompt, taps Approve, unlocks the prompt (screen-lock:
 #    types PIN; fingerprint: touches the sensor), and requires /auth to return
@@ -14,11 +17,17 @@
 # 3. Remove: taps "Remove this phone", confirms, and requires the enrollment
 #    screen.
 # fingerprint only:
-# 3. Not me: the same, denied with "Not me": /auth must return deny with status
+# 3. Push: with the app in the background, starts a login and hands the app
+#    the push frict-server would send, through FCM's receiver as Play services
+#    delivers it, with made-up details beside the ID. Its notification must
+#    open the app on the challenge with the server's details, never the push's,
+#    and Deny must reach /auth.
+# 4. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
 #    pushes after the fraud report.
-# 4. Alert: the e2e user is its own alert recipient, so its poll must list the
-#    fraud report, with both Authentik links tappable.
+# 5. Alert: the e2e user is its own alert recipient, so its poll must list the
+#    fraud report, with both Authentik links tappable. The alert's push comes
+#    first, and its notification opens the app.
 #
 # Needs docker and a booted, rootable emulator in ANDROID_SERIAL with screen
 # lock PIN; fingerprint also needs a strong biometric enrolled
@@ -41,7 +50,8 @@ DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 : "${ANDROID_SERIAL:?set ANDROID_SERIAL to the booted emulator}"
 API_HOST=10.0.2.2
 CLIENT_ID=DIFRICTANDROIDE2E000
-PACKAGE=app.frict.android
+PACKAGE=app.frict.android.dev
+ACTIVITY=app.frict.android.MainActivity
 NAME=frict-android-e2e-$$
 
 . "$ROOT/scripts/adb.sh"
@@ -65,12 +75,13 @@ src=$work/frict-server
 git init -q "$src"
 git -C "$src" fetch -q --depth 1 https://github.com/frict-auth/frict-server.git "$FRICT_SERVER_COMMIT"
 git -C "$src" checkout -q FETCH_HEAD
-mkdir "$src/cmd/duo"
+mkdir "$src/cmd/duo" "$src/cmd/store"
 cp "$ROOT/scripts/duo/main.go" "$src/cmd/duo/"
+cp "$ROOT/scripts/store/main.go" "$src/cmd/store/"
 docker build -q -t "$NAME" -f "$src/e2e/frict-server.Dockerfile" "$src" >/dev/null
 docker run --rm -v "$src":/src -v "$work":/out -w /src -u "$(id -u):$(id -g)" \
   -e HOME=/tmp -e GOCACHE=/tmp/gocache -e CGO_ENABLED=0 \
-  golang:1.27.3 go build -o /out/duo ./cmd/duo
+  golang:1.27.3 sh -c 'go build -o /out/duo ./cmd/duo && go build -o /out/store ./cmd/store'
 
 secrets=$work/secrets
 mkdir "$secrets"
@@ -96,9 +107,11 @@ server {
 CONF
 chmod 0644 "$secrets"/* "$work/tls.conf"
 
+# The server runs as this user, so the store helper can open its database.
+mkdir "$work/data"
 docker network create "$NAME" >/dev/null
 docker run -d --name "$NAME-server" --network "$NAME" --network-alias frict-server \
-  --tmpfs /data:uid=65532,gid=65532,mode=0700 -v "$secrets":/secrets:ro \
+  -u "$(id -u):$(id -g)" -v "$work/data":/data -v "$secrets":/secrets:ro \
   -e FRICT_API_HOSTNAME=$API_HOST -e FRICT_CLIENT_ID=$CLIENT_ID \
   -e FRICT_CLIENT_SECRET_FILE=/secrets/duo-client-secret -e FRICT_DB_PATH=/data/frict.db \
   -e FRICT_AUTHENTIK_URL=http://127.0.0.1:9000 -e FRICT_ALERT_RECIPIENTS=android-e2e "$NAME" >/dev/null
@@ -117,6 +130,74 @@ duo() {
     E2E_SKEY_FILE=$secrets/duo-client-secret "$work/duo" "$@"
 }
 
+store() { E2E_DB=$work/data/frict.db "$work/store" "$@"; }
+
+# app_fid: the FID Firebase Installations saved for the app, once Firebase has
+# registered it.
+app_fid() {
+  local i json fid
+  for ((i = 0; i < 60; i++)); do
+    json=$(adb shell "cat /data/data/$PACKAGE/no_backup/PersistedInstallation.*.json" 2>/dev/null) || json=
+    # Status 3 is REGISTERED in PersistedInstallation.RegistrationStatus.
+    if fid=$(python3 -I -c 'import json, sys
+p = json.loads(sys.argv[1])
+if p.get("Status") != 3: sys.exit(1)
+print(p["Fid"])' "$json" 2>/dev/null); then
+      echo "$fid"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "no Firebase-registered FID for $PACKAGE within 60s; its PersistedInstallation: ${json:-none}" >&2
+  return 1
+}
+
+# wait_server_fid WANT: waits until the server stores WANT as the user's FID.
+wait_server_fid() {
+  local i got
+  for ((i = 0; i < 30; i++)); do
+    got=$(store fid "$user_id")
+    [[ $got == "$1" ]] && return 0
+    sleep 1
+  done
+  echo "server FID after 30s: \"$got\", want the app's" >&2
+  return 1
+}
+
+# push KEY=VALUE...: delivers a data message to the app the way Play services
+# does, through firebase-messaging's receiver (root can send what only Play
+# services may).
+push() {
+  local args=() kv
+  for kv in "$@"; do args+=(--es "${kv%%=*}" "${kv#*=}"); done
+  adb shell am broadcast -n "$PACKAGE/com.google.firebase.iid.FirebaseInstanceIdReceiver" \
+    -a com.google.android.c2dm.intent.RECEIVE --es google.message_id "e2e-$RANDOM" "${args[@]}" >/dev/null
+}
+
+# notification_titles: titles of the app's notifications.
+notification_titles() {
+  adb shell dumpsys notification --noredact | tr -d '\r' | awk -v pkg="pkg=$PACKAGE " '
+    /NotificationRecord\(/ { ours = index($0, pkg) > 0 }
+    ours && /android\.title=String \(/ { sub(/.*android\.title=String \(/, ""); sub(/\)$/, ""); print }'
+}
+
+# open_notification TITLE: waits for the app's notification titled TITLE and taps it.
+open_notification() {
+  local i
+  for ((i = 0; i < 30; i++)); do
+    if grep -qxF "$1" <<<"$(notification_titles)"; then
+      echo "notification shown: $1"
+      adb shell cmd statusbar expand-notifications
+      wait_for_text "$1"
+      tap_text "$1"
+      return 0
+    fi
+    sleep 1
+  done
+  echo "no notification titled \"$1\" from $PACKAGE within 30s; it has: $(notification_titles)" >&2
+  return 1
+}
+
 # Android trusts user-added CAs from this directory, named by OpenSSL's old subject hash.
 ca_name=$(openssl x509 -subject_hash_old -noout -in "$secrets/ca.pem").0
 adb_root
@@ -129,6 +210,8 @@ adb shell "mkdir -p /data/misc/user/0/cacerts-added && mv /data/local/tmp/$ca_na
 adb shell pm clear "$PACKAGE" >/dev/null
 # The server is 10.0.2.2, which Android 17 treats as local network.
 adb shell pm grant "$PACKAGE" android.permission.ACCESS_LOCAL_NETWORK
+adb shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS
+echo "Google Play services: $(adb shell dumpsys package com.google.android.gms | tr -d '\r' | sed -n 's/^ *versionName=//p' | head -1)"
 
 link=$(duo enroll android-e2e)
 user_id=$(sed -n 's/.*[?&]user_id=\([^&]*\).*/\1/p' <<<"$link")
@@ -170,25 +253,49 @@ unlock_prompt() {
   fi
 }
 
-# login ANSWER_BUTTON PROMPT_TITLE WANT: starts a login, waits for the app to
-# show it, answers it through the prompt, and requires /auth's
+fid=$(app_fid)
+echo "the app has a Firebase-registered FID"
+wait_server_fid "$fid"
+echo "the server holds the app's FID after enrollment"
+store setfid "$user_id" stale-e2e-fid
+adb shell am force-stop "$PACKAGE"
+adb shell am start -W -n "$PACKAGE/$ACTIVITY" >/dev/null
+wait_server_fid "$fid"
+echo "the server holds the app's FID again after the app's next start"
+
+# start_login: starts a login in the background; answer waits for its result.
+start_login() {
+  auth_out=$work/auth-$RANDOM
+  duo auth "$user_id" android-e2e >"$auth_out" &
+  auth_pid=$!
+}
+
+# answer ANSWER_BUTTON PROMPT_TITLE WANT: waits for the app to show the started
+# login, answers it through the prompt, and requires /auth's
 # "<result> <status>: <status_msg>" to start with WANT.
-login() {
-  local out=$work/auth-$RANDOM pid got
-  duo auth "$user_id" android-e2e >"$out" &
-  pid=$!
+answer() {
+  local got
   # The details must be on screen before anything asks to unlock.
   wait_for_text "Sign-in request" 60
   wait_for_text "User: android-e2e"
   wait_for_text "From: 203.0.113.7"
   wait_for_text "Application: Frict Android e2e"
+  if grep -qE 'mallory|198\.51\.100\.66' <<<"$(ui_dump)"; then
+    echo "the app shows details from the push, not the server" >&2
+    exit 1
+  fi
   tap_text "$1"
   wait_for_text "$2"
   unlock_prompt "$2"
-  wait "$pid"
-  got=$(<"$out")
+  wait "$auth_pid"
+  got=$(<"$auth_out")
   echo "/auth after $1: $got"
   [[ $got == "$3"* ]] || { echo "/auth after $1: $got, want $3" >&2; exit 1; }
+}
+
+login() {
+  start_login
+  answer "$@"
 }
 
 login Approve "Approve this sign-in" "allow allow:"
@@ -203,6 +310,21 @@ if [[ $MODE == screen-lock ]]; then
   echo "removed; back on the enrollment screen"
   exit 0
 fi
+
+adb shell input keyevent KEYCODE_HOME
+start_login
+challenge_id=
+for ((i = 0; i < 30; i++)); do
+  challenge_id=$(store challenge "$user_id" 2>/dev/null) && break
+  sleep 1
+done
+[[ -n $challenge_id ]] || { echo "no pending challenge for $user_id within 30s" >&2; exit 1; }
+push challenge_id="$challenge_id" username=mallory ipaddr=198.51.100.66
+echo "login push delivered"
+open_notification "Sign-in request"
+answer Deny "Deny this sign-in" "deny deny:"
+wait_for_text "Denied."
+
 login "Not me" "Report this sign-in as not you" "deny fraud:"
 wait_for_text "Denied and reported as not you."
 paused=$(duo auth "$user_id" android-e2e)
@@ -210,6 +332,10 @@ echo "/auth after the fraud report: $paused"
 [[ $paused == "deny locked_out: Pushes paused"* ]] ||
   { echo "/auth after the fraud report: $paused, want deny locked_out: Pushes paused…" >&2; exit 1; }
 
+adb shell input keyevent KEYCODE_HOME
+push alert_id="$(store alert "$user_id")"
+echo "alert push delivered"
+open_notification "Sign-in reported as not theirs"
 wait_for_text "Sign-in reported as not theirs" 30
 wait_for_text "Reported by android-e2e"
 scroll_down

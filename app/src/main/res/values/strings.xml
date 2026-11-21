@@ -54,4 +54,8 @@
     <string name="removed">This phone was removed. Ask an admin to delete it in Authentik.</string>
     <string name="not_removed">Could not remove the enrollment from this phone.</string>
     <string name="no_browser">No browser to open %1$s</string>
+    <string name="channel_logins">Sign-in requests</string>
+    <string name="channel_alerts">Sign-ins reported as not theirs</string>
+    <string name="notify_login">Sign-in request</string>
+    <string name="notify_open">Open Frict to see it</string>
 </resources>

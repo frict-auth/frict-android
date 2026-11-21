@@ -11,10 +11,11 @@ import org.json.JSONObject
 const val ENROLL_PATH = "/device/v1/enroll"
 
 /**
- * What Firebase will provide once push lands; the server requires a non-empty fid and
- * clears one that FCM rejects, so until then the device is poll-only.
+ * Enrolls a device that has no Firebase Installation ID, such as a build without a
+ * Firebase project. The server requires a non-empty fid and clears one that FCM rejects,
+ * so such a device polls until it sends a real one.
  */
-const val NO_FID_YET = "no-fid-yet"
+const val NO_FID = "no-fid"
 
 private val USER_ID = Regex("DU[A-Z2-7]{26}")
 private val HOST = Regex("[A-Za-z0-9.-]+(:[0-9]{1,5})?")

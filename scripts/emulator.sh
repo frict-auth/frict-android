@@ -155,7 +155,7 @@ wait_unlocked
 adb shell locksettings set-pin "$PIN" >/dev/null
 ! fingerprint_enrolled || { echo "a fingerprint is enrolled before the screen-lock e2e" >&2; exit 1; }
 "$ROOT/scripts/e2e.sh" screen-lock
-adb uninstall app.frict.android >/dev/null
+adb uninstall app.frict.android.dev >/dev/null
 
 enroll_fingerprint
 echo "fingerprint enrolled"

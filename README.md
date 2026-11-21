@@ -17,8 +17,12 @@ The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
 twice. `screen-lock`, before any fingerprint exists, enrolls with the default
 unlock, approves a login by typing the PIN and removes the phone. Then a fingerprint is enrolled,
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
-approves a login and denies one as "not me" with the fingerprint sensor. It
-runs frict-server at
+approves a login and denies one as "not me" with the fingerprint sensor. Both
+check that the server holds the app's Firebase Installation ID after
+enrollment and again after a restart; `fingerprint` also hands the app a
+login and an alert push through firebase-messaging's receiver, as Play
+services delivers them, and opens the app from their notifications. It runs
+frict-server at
 a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
@@ -47,7 +51,7 @@ After changing a dependency, regenerate both files:
 ```
 rm gradle/verification-metadata.xml
 ./gradlew --write-verification-metadata sha256 --write-locks --refresh-dependencies \
-  assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest :app:dependencies
+  assembleDebug assembleRelease testDebugUnitTest lintDebug assembleDebugAndroidTest :app:dependencies
 ```
 
 The diff of the two files is what the reviewer checks: every new or changed
@@ -69,7 +73,9 @@ The app enrolls from an activation link
 (`frict://enroll?code=…&host=…&user_id=…`, what Authentik's QR code encodes),
 opened as a link or pasted. It creates the `device_key` and `approval_key`
 with the activation code as attestation challenge, sends the enroll request
-signed with the `device_key`, and saves the user once the server accepts it.
+signed with the `device_key` with its Firebase Installation ID (FID), and saves
+the user once the server accepts it. A build without a Firebase project sends
+the placeholder FID `no-fid` and polls.
 
 Before enrolling, the user picks what unlocks the `approval_key`:
 
@@ -92,7 +98,21 @@ works too. Removing the screen lock invalidates either key. Adding a
 fingerprint, or removing them all, invalidates a "Fingerprint only" key; a
 "Fingerprint or screen lock" key is bound to the screen lock alone and
 survives both.
-Until push lands, it sends the placeholder FID `no-fid-yet`.
+
+## Push
+
+Only the debug build (`app.frict.android.dev`) has a `google-services.json`,
+for the dev Firebase project; release builds without one, with a warning, and
+runs poll-only until the release project exists. On every start the app
+registers with FCM and sends its FID to `/device/v1/fid`, signed with the
+`device_key`; FCM's `onRegistered` sends a new one the same way.
+
+A push carries only a challenge or alert ID. The app shows a high-priority
+notification for each (channels "Sign-in requests" and "Sign-ins reported as
+not theirs"), saying only that there is something to see. A login
+notification opens the app on its challenge, whose details the app fetches
+with the `device_key`. Polling stays: a missed push is found by the next poll.
+The app asks for the notification permission once enrolled.
 
 ## Approving a login
 

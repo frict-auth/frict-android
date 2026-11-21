@@ -21,13 +21,17 @@ enum class ChallengeState { PENDING, APPROVED, DENIED_CANCEL, DENIED_NOT_ME, EXP
  * Stands in for frict-server's device API (docs/device-protocol.md): enroll accepts one
  * activation [code] for [userId], signed by the body's device_key; pending and challenge
  * want the enrolled device_key, answer the enrolled approval_key. Challenges are added
- * with [addChallenge] and their state is in [challenges]; pending lists [alerts].
+ * with [addChallenge] and their state is in [challenges]; pending lists [alerts]. fid,
+ * signed with the device_key, sets [fid].
  */
 class FakeFrictServer(private val userId: String, private val code: String) : AutoCloseable {
     val requests = CopyOnWriteArrayList<RecordedRequest>()
     val challenges = linkedMapOf<String, ChallengeState>()
     var pollInterval = 5
     val alerts = JSONArray()
+
+    @Volatile
+    var fid: String? = null
     private val details = mutableMapOf<String, JSONObject>()
     private var deviceKey: PublicKey? = null
     private var approvalKey: PublicKey? = null
@@ -106,6 +110,14 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
             else -> 200 to details.getValue(r.json.getString("challenge_id")).toString()
         }
         ANSWER_PATH -> if (!verifies(r, approvalKey)) unauthorized else answer(r.json)
+        FID_PATH -> when {
+            !verifies(r, deviceKey) -> unauthorized
+            r.json.fields() != setOf("fid") || r.json.optString("fid").isEmpty() -> badRequest
+            else -> {
+                fid = r.json.getString("fid")
+                200 to "{}"
+            }
+        }
         else -> 404 to """{"error":"not_found"}"""
     }
 
@@ -136,12 +148,13 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
         val device = p256(body.getString("device_key"))
         if (!verifies(r, device)) return false
         enrolled(device, p256(body.getString("approval_key")))
+        fid = body.getString("fid")
         return true
     }
 
     private fun verifies(r: RecordedRequest, key: PublicKey?): Boolean {
-        if (key == null) return false
-        val (claimedUser, unix, signature) = r.authorization.removePrefix("Frict-P256 ").split(':')
+        if (key == null || !r.authorization.startsWith("Frict-P256 ")) return false
+        val (claimedUser, unix, signature) = r.authorization.removePrefix("Frict-P256 ").split(':').takeIf { it.size == 3 } ?: return false
         if (claimedUser != userId) return false
         return Signature.getInstance("SHA256withECDSA").run {
             initVerify(key)

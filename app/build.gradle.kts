@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.services)
 }
 
 android {
@@ -30,6 +31,7 @@ android {
 
     buildTypes {
         debug {
+            applicationIdSuffix = ".dev"
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -53,6 +55,8 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
     testImplementation(libs.junit)
     // android.jar only stubs org.json; local unit tests need a real implementation.
     testImplementation(libs.org.json)
@@ -65,8 +69,17 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
+// Only the debug build has a google-services.json (the dev Firebase project) until the
+// release project exists; a release build without one runs poll-only.
+googleServices {
+    missingGoogleServicesStrategy = com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy.WARN
+}
+
 // gradle.lockfile pins what ships and what the tests run; the CI vulnerability
 // scan reads it. Build tooling is covered by gradle/verification-metadata.xml.
 configurations.matching { it.name.endsWith("RuntimeClasspath") }.configureEach {
     resolutionStrategy.activateDependencyLocking()
+    // Only kotlin-stdlib's metadata names it, as a constraint, and --write-locks leaves it
+    // out; checking the lock then resolves it and fails. Its classes are in kotlin-stdlib.
+    exclude(group = "org.jetbrains.kotlin", module = "kotlin-stdlib-common")
 }
