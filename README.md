@@ -51,11 +51,15 @@ rm gradle/verification-metadata.xml
 The diff of the two files is what the reviewer checks: every new or changed
 artifact, with its checksum.
 
-Dependabot proposes Gradle and Actions updates weekly, once a release is 7
+Dependabot proposes Gradle and Actions updates monthly, once a release is 7
 days old. It updates `gradle.lockfile` but not the verification metadata, so
 its Gradle PRs fail CI until someone runs the command above on the Dependabot
 branch and pushes the result. It doesn't update the OSV-Scanner image either
 (it skips `docker://` references); bump that by hand.
+
+GitHub raises no Dependabot alerts for Gradle, so CI's `vulnerabilities`
+(OSV-Scanner on the lockfile) and `codeql` jobs also run on `main` every
+Monday at 06:00 UTC.
 
 ## Enrollment
 
