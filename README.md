@@ -15,7 +15,7 @@ scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the e2e
 
 The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
 twice. `screen-lock`, before any fingerprint exists, enrolls with the default
-unlock and approves a login by typing the PIN. Then a fingerprint is enrolled,
+unlock, approves a login by typing the PIN and removes the phone. Then a fingerprint is enrolled,
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
 approves a login and denies one as "not me" with the fingerprint sensor. It
 runs frict-server at
@@ -76,7 +76,11 @@ Before enrolling, the user picks what unlocks the `approval_key`:
 
 Keystore fixes a key's unlock when it creates it, so the choice is saved with
 the account (not a secret) and shown on the main screen; changing it means
-enrolling again, with a new activation code. An account saved before the
+removing this phone and enrolling again, with a new activation code.
+
+"Remove this phone", after a confirmation, deletes the saved account and both
+keys and returns to the enrollment screen. The server keeps its device record
+until an admin deletes the Duo device in Authentik. An account saved before the
 choice existed shows "Fingerprint only", which is what its key requires.
 
 "Fingerprint" is Android's strong (Class 3) biometric: a Class 3 face unlock

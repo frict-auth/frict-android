@@ -115,4 +115,9 @@ fun Signature.asSigner() = Signer { data ->
     sign()
 }
 
+fun deleteKeys() = keyStore().run {
+    deleteEntry(DEVICE_KEY_ALIAS)
+    deleteEntry(APPROVAL_KEY_ALIAS)
+}
+
 private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }

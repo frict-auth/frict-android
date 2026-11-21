@@ -68,6 +68,20 @@ interface AccountStore {
 
     /** Returns false if the account could not be saved. */
     fun save(account: Account): Boolean
+
+    /** Returns false if the account could not be removed. */
+    fun clear(): Boolean
+}
+
+/**
+ * Removes this phone's enrollment: the saved account, then both keys. The server keeps
+ * its device record until an admin deletes it. Returns false, keeping the keys, if the
+ * account could not be removed.
+ */
+fun unenroll(store: AccountStore, deleteKeys: () -> Unit): Boolean {
+    if (!store.clear()) return false
+    deleteKeys()
+    return true
 }
 
 sealed interface EnrollResult {

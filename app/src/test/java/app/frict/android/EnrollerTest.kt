@@ -22,6 +22,12 @@ class MemoryAccountStore(var account: Account? = null) : AccountStore {
         this.account = account
         return true
     }
+
+    var clearSucceeds = true
+    override fun clear(): Boolean {
+        if (clearSucceeds) account = null
+        return clearSucceeds
+    }
 }
 
 /** Software P-256 keys standing in for the Keystore, with placeholder attestation chains. */

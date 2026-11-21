@@ -46,5 +46,12 @@
     <string name="reset_password">Reset password</string>
     <string name="revoke_sessions">Revoke sessions</string>
     <string name="link_not_opened">%1$s (not a web link, not opened): %2$s</string>
+    <string name="remove_phone">Remove this phone</string>
+    <string name="remove_phone_title">Remove this phone?</string>
+    <string name="remove_phone_explanation">Deletes this phone\'s keys and enrollment; it can\'t approve sign-ins until enrolled again. The server keeps its record of this phone until an admin deletes the device in Authentik.</string>
+    <string name="remove">Remove</string>
+    <string name="cancel">Cancel</string>
+    <string name="removed">This phone was removed. Ask an admin to delete it in Authentik.</string>
+    <string name="not_removed">Could not remove the enrollment from this phone.</string>
     <string name="no_browser">No browser to open %1$s</string>
 </resources>

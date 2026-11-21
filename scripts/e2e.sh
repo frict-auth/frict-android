@@ -10,6 +10,9 @@
 #    details before the prompt, taps Approve, unlocks the prompt (screen-lock:
 #    types PIN; fingerprint: touches the sensor), and requires /auth to return
 #    allow.
+# screen-lock only:
+# 3. Remove: taps "Remove this phone", confirms, and requires the enrollment
+#    screen.
 # fingerprint only:
 # 3. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
@@ -137,6 +140,15 @@ adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/de
 wait_for_text Enroll
 [[ $MODE == fingerprint ]] && tap_text "$MODE_LABEL"
 tap_text Enroll
+# Keystore attests through remote key provisioning, which can report no network
+# for a while after boot; the app shows that, and a user would tap Enroll again.
+for ((i = 0; i < 3; i++)); do
+  sleep 5
+  failed=$(grep -o 'text="Could not create keys:[^"]*"' <<<"$(ui_dump)") || break
+  echo "app shows $failed; tapping Enroll again" >&2
+  sleep 15
+  tap_text Enroll
+done
 for ((i = 0; i < 30; i++)); do
   after=$(duo status "$user_id" "$link")
   [[ $after == waiting ]] || break
@@ -179,7 +191,16 @@ login() {
 
 login Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
-[[ $MODE == fingerprint ]] || exit 0
+
+if [[ $MODE == screen-lock ]]; then
+  tap_text "Remove this phone"
+  wait_for_text "Remove this phone?"
+  tap_text Remove
+  wait_for_text "This phone was removed. Ask an admin to delete it in Authentik."
+  wait_for_text "Not enrolled"
+  echo "removed; back on the enrollment screen"
+  exit 0
+fi
 login "Not me" "Report this sign-in as not you" "deny fraud:"
 wait_for_text "Denied and reported as not you."
 paused=$(duo auth "$user_id" android-e2e)
@@ -189,6 +210,7 @@ echo "/auth after the fraud report: $paused"
 
 wait_for_text "Sign-in reported as not theirs" 30
 wait_for_text "Reported by android-e2e"
+scroll_down
 for link in "Reset password" "Revoke sessions"; do
   wait_for_text "$link"
   node=$(grep -m1 -iF "text=\"$link\"" <<<"$(ui_dump)")

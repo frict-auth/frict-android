@@ -27,4 +27,7 @@ class PrefsAccountStore(context: Context) : AccountStore {
             .putString(KEY_USER_ID, account.userId)
             .putString(KEY_UNLOCK_MODE, account.unlockMode.name)
             .commit()
+
+    @SuppressLint("UseKtx")
+    override fun clear(): Boolean = prefs.edit().clear().commit()
 }

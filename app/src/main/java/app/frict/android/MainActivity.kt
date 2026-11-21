@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -29,6 +30,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -61,6 +63,7 @@ class MainActivity : ComponentActivity() {
     private var challenge by mutableStateOf<Challenge?>(null)
     private var pollError by mutableStateOf<String?>(null)
     private var alerts by mutableStateOf<List<Alert>>(emptyList())
+    private var confirmingRemove by mutableStateOf(false)
 
     /** [challenge]'s ID, for the account thread. */
     @Volatile
@@ -156,6 +159,40 @@ class MainActivity : ComponentActivity() {
         status?.let { Text(it) }
         pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
         alerts.forEach { AlertCard(it) }
+        OutlinedButton(onClick = { confirmingRemove = true }, enabled = !busy) { Text(stringResource(R.string.remove_phone)) }
+        if (confirmingRemove) RemoveDialog()
+    }
+
+    @Composable
+    private fun RemoveDialog() {
+        AlertDialog(
+            onDismissRequest = { confirmingRemove = false },
+            title = { Text(stringResource(R.string.remove_phone_title)) },
+            text = { Text(stringResource(R.string.remove_phone_explanation)) },
+            confirmButton = { TextButton(onClick = ::remove) { Text(stringResource(R.string.remove)) } },
+            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    private fun remove() {
+        confirmingRemove = false
+        busy = true
+        accountThread.execute {
+            val removed = unenroll(PrefsAccountStore(applicationContext), ::deleteKeys)
+            runOnUiThread {
+                busy = false
+                if (removed) {
+                    account = null
+                    show(null)
+                    alerts = emptyList()
+                    pollError = null
+                    link = ""
+                    status = getString(R.string.removed)
+                } else {
+                    status = getString(R.string.not_removed)
+                }
+            }
+        }
     }
 
     @Composable

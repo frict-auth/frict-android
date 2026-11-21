@@ -78,7 +78,6 @@ class DeviceKeysTest {
             assertTrue(isUserAuthenticationRequired)
             assertEquals(KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL, userAuthenticationType)
             assertEquals(0, userAuthenticationValidityDurationSeconds)
-            android.util.Log.i("DeviceKeysTest", "either mode isInvalidatedByBiometricEnrollment=$isInvalidatedByBiometricEnrollment")
         }
     }
 
@@ -123,5 +122,14 @@ class DeviceKeysTest {
             val signer = approvalSignature().asSigner()
             assertThrows(mode.name, SignatureException::class.java) { signer.sign("frict-device-v1".toByteArray()) }
         }
+    }
+
+    @Test
+    fun deleteKeysRemovesBothKeys() {
+        KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
+        deleteKeys()
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        assertFalse(store.containsAlias(DEVICE_KEY_ALIAS))
+        assertFalse(store.containsAlias(APPROVAL_KEY_ALIAS))
     }
 }

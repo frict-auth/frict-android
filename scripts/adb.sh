@@ -32,6 +32,14 @@ ui_dump() {
   return 1
 }
 
+# scroll_down: swipes up over the middle of the screen; uiautomator only dumps
+# what is on screen.
+scroll_down() {
+  local w h
+  IFS=x read -r w h <<<"$(adb shell wm size | sed -n 's/.*: //p' | tail -1 | tr -d '\r')"
+  adb shell input swipe $((w / 2)) $((h * 3 / 4)) $((w / 2)) $((h / 4)) 300
+}
+
 # dismiss_anr SCREEN: taps Wait if SCREEN (a ui_dump) shows an "isn't
 # responding" dialog, which a loaded machine raises now and then.
 dismiss_anr() {
