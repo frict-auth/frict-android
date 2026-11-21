@@ -14,7 +14,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
 export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH
 
-IMAGE=${IMAGE:-"system-images;android-36;google_apis;x86_64"}
+# The 4 KB page size Google APIs images ship Play services too old for
+# firebase-messaging (26.11 on API 37.0); this one ships 26.22.
+IMAGE=${IMAGE:-"system-images;android-37.1;google_apis_ps16k;x86_64"}
+# firebase-messaging's minimum: "Google Play services out of date ... Requires 261200000".
+MIN_GMS_VERSION_CODE=261200000
 AVD=${AVD:-frict-test}
 PORT=${PORT:-5554}
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-300}
@@ -73,7 +77,7 @@ fingerprint_enroll_attempt() {
     screen=$(ui_dump) || return 1
     if grep -qiF "isn't responding\"" <<<"$screen"; then
       dismiss_anr "$screen"
-    elif [[ -z $pin_entered ]] && grep -qiF 'text="Re-enter your PIN"' <<<"$screen"; then
+    elif [[ -z $pin_entered ]] && grep -qiE 'text="(Re-enter your PIN|Enter your device PIN)"' <<<"$screen"; then
       adb shell input text "$PIN"
       adb shell input keyevent KEYCODE_ENTER
       pin_entered=1
@@ -139,6 +143,11 @@ until [[ $(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]
   sleep 2
 done
 echo "$ANDROID_SERIAL booted in $((SECONDS - start))s: API $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+gms=$(adb shell dumpsys package com.google.android.gms)
+gms_code=$(sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' <<<"$gms" | head -n1)
+echo "Play services $(sed -n 's/.*versionName=//p' <<<"$gms" | head -n1), versionCode $gms_code"
+((gms_code >= MIN_GMS_VERSION_CODE)) \
+  || { echo "Play services versionCode $gms_code is older than $MIN_GMS_VERSION_CODE" >&2; exit 1; }
 
 adb_root
 adb shell svc power stayon true
