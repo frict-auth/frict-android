@@ -3,8 +3,9 @@
 set -euo pipefail
 
 jq -r '
-  .runs[] | (.tool.driver.rules // []) as $rules | .results[]? |
-  (.rule.index // -1) as $i | (if $i >= 0 then $rules[$i] else null end) as $rule |
+  .runs[] |
+  ([.tool.driver, .tool.extensions[]?] | map(.rules // []) | add | map({(.id): .}) | add // {}) as $rules |
+  .results[]? | $rules[.ruleId] as $rule |
   [
     .ruleId,
     (.level // $rule.defaultConfiguration.level // "warning"),
