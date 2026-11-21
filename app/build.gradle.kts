@@ -57,6 +57,10 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.compose)
+    implementation(libs.zxing.core)
     testImplementation(libs.junit)
     // android.jar only stubs org.json; local unit tests need a real implementation.
     testImplementation(libs.org.json)

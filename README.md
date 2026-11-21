@@ -15,7 +15,11 @@ scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the e2e
 
 The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
 twice. `screen-lock`, before any fingerprint exists, enrolls with the default
-unlock, approves a login by typing the PIN and removes the phone. Then a fingerprint is enrolled,
+unlock by scanning frict-server's QR code with the emulator's back camera
+(`-camera-back imagefile:`), approves a login by typing the PIN and removes the
+phone. Before the scan it refuses the camera once and shows a QR code that is
+not an activation link; the camera must close when the app leaves the screen
+and once the link is scanned. Then a fingerprint is enrolled,
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
 approves a login and denies one as "not me" with the fingerprint sensor. Both
 check that the server holds the app's Firebase Installation ID after
@@ -71,7 +75,15 @@ Monday at 06:00 UTC.
 
 The app enrolls from an activation link
 (`frict://enroll?code=…&host=…&user_id=…`, what Authentik's QR code encodes),
-opened as a link or pasted. It creates the `device_key` and `approval_key`
+scanned, opened as a link or pasted.
+
+"Scan QR code" asks for the camera permission when tapped; refused, the screen
+says to paste or open the link instead. The scanner reads QR codes only
+(ZXing's `QRCodeReader` on CameraX frames) and accepts a code only if it is an
+activation link that passes the same check as a pasted one; anything else is
+shown as rejected and never opened. The camera stops at the first activation
+link, or when the scanner or the app leaves the screen. Frames stay in memory
+and nothing goes over the network. It creates the `device_key` and `approval_key`
 with the activation code as attestation challenge, sends the enroll request
 signed with the `device_key` with its Firebase Installation ID (FID), and saves
 the user once the server accepts it. A build without a Firebase project sends

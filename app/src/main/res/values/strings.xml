@@ -3,6 +3,12 @@
     <string name="not_enrolled">Not enrolled</string>
     <string name="activation_link">Activation link</string>
     <string name="enroll">Enroll</string>
+    <string name="scan_qr_code">Scan QR code</string>
+    <string name="stop_scanning">Stop scanning</string>
+    <string name="scanned">Activation link scanned. Choose how to approve sign-ins, then tap Enroll.</string>
+    <string name="scanned_not_an_activation_link">That QR code is not a Frict activation link. It was not opened.</string>
+    <string name="camera_refused">Without the camera, paste the activation link below or open it as a link on this phone.</string>
+    <string name="camera_unavailable">Could not start the camera: %1$s. Paste the activation link instead.</string>
     <string name="enrolled">Enrolled as %1$s with %2$s</string>
     <string name="already_enrolled">This device is already enrolled.</string>
     <string name="not_an_activation_link">That is not a Frict activation link.</string>

@@ -1,6 +1,7 @@
 package app.frict.android
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -12,10 +13,12 @@ import android.os.Bundle
 import android.os.CancellationSignal
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -60,6 +63,14 @@ class MainActivity : ComponentActivity() {
     private var pollError by mutableStateOf<String?>(null)
     private var alerts by mutableStateOf<List<Alert>>(emptyList())
     private var confirmingRemove by mutableStateOf(false)
+    private var scanning by mutableStateOf(false)
+
+    // The check is for FragmentActivity, whose versions before fragment 1.3.0 lose results;
+    // this is a ComponentActivity, and fragment 1.1.0 is on the classpath only through Firebase.
+    @SuppressLint("InvalidFragmentVersionForActivityResult")
+    private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) scanning = true else status = getString(R.string.camera_refused)
+    }
 
     /** [challenge]'s ID, for the account thread. */
     @Volatile
@@ -135,6 +146,11 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun EnrollForm() {
         Text(stringResource(R.string.not_enrolled))
+        if (scanning) {
+            Scanner()
+            return
+        }
+        OutlinedButton(onClick = ::scan, enabled = !busy) { Text(stringResource(R.string.scan_qr_code)) }
         OutlinedTextField(
             value = link,
             onValueChange = { link = it },
@@ -149,6 +165,36 @@ class MainActivity : ComponentActivity() {
             Text(stringResource(R.string.enroll))
         }
         status?.let { Text(it) }
+    }
+
+    @Composable
+    private fun Scanner() {
+        QrScanner(
+            activity = this,
+            onLink = {
+                scanning = false
+                link = it
+                status = getString(R.string.scanned)
+            },
+            onNotAnActivationLink = { status = getString(R.string.scanned_not_an_activation_link) },
+            onCameraError = {
+                scanning = false
+                status = getString(R.string.camera_unavailable, it)
+            },
+            modifier = Modifier.fillMaxWidth().aspectRatio(1f),
+        )
+        OutlinedButton(onClick = { scanning = false }) { Text(stringResource(R.string.stop_scanning)) }
+        status?.let { Text(it) }
+    }
+
+    /** The camera permission is asked for here, when the user first wants to scan. */
+    private fun scan() {
+        status = null
+        if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            scanning = true
+        } else {
+            cameraPermission.launch(Manifest.permission.CAMERA)
+        }
     }
 
     @Composable

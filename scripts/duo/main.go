@@ -5,11 +5,16 @@
 // device answers or the challenge expires. scripts/e2e.sh copies it into a
 // frict-server source tree, because it imports that module's internal/duosig.
 //
+// With CAMERA_PNG, enroll also writes the activation's QR code (the server's
+// activation_barcode) as the emulator's back camera image; qr writes a QR code
+// of TEXT the same way.
+//
 // Usage:
 //
-//	duo enroll USERNAME
+//	duo enroll USERNAME [CAMERA_PNG]
 //	duo status USER_ID LINK
 //	duo auth USER_ID USERNAME
+//	duo qr TEXT CAMERA_PNG
 //
 // Environment: E2E_HOST (API hostname, as signed), E2E_ADDR (where to dial
 // it), E2E_CA (CA certificate PEM), E2E_IKEY (client ID) and E2E_SKEY_FILE
@@ -21,8 +26,12 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/draw"
+	"image/png"
 	"io"
 	"log"
 	"net"
@@ -31,6 +40,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/qr"
 	"github.com/frict-auth/frict-server/internal/duosig"
 )
 
@@ -38,12 +49,30 @@ func main() {
 	log.SetFlags(0)
 	args := os.Args[1:]
 	switch {
-	case len(args) == 2 && args[0] == "enroll":
+	case (len(args) == 2 || len(args) == 3) && args[0] == "enroll":
 		var r struct {
-			ActivationCode string `json:"activation_code"`
+			ActivationCode    string `json:"activation_code"`
+			ActivationBarcode string `json:"activation_barcode"`
 		}
 		call("/auth/v2/enroll", map[string]string{"username": args[1]}, &r)
+		if len(args) == 3 {
+			png64, ok := strings.CutPrefix(r.ActivationBarcode, "data:image/png;base64,")
+			if !ok {
+				log.Fatalf("activation_barcode is not a PNG data URL: %.40q", r.ActivationBarcode)
+			}
+			raw, err := base64.StdEncoding.DecodeString(png64)
+			check(err)
+			code, err := png.Decode(bytes.NewReader(raw))
+			check(err)
+			writeCameraImage(args[2], code)
+		}
 		fmt.Println(r.ActivationCode)
+	case len(args) == 3 && args[0] == "qr":
+		code, err := qr.Encode(args[1], qr.M, qr.Auto)
+		check(err)
+		code, err = barcode.Scale(code, code.Bounds().Dx()*6, code.Bounds().Dy()*6)
+		check(err)
+		writeCameraImage(args[2], withQuietZone(code))
 	case len(args) == 3 && args[0] == "status":
 		var status string
 		call("/auth/v2/enroll_status", map[string]string{"user_id": args[1], "activation_code": args[2]}, &status)
@@ -62,7 +91,7 @@ func main() {
 		}, &r)
 		fmt.Printf("%s %s: %s\n", r.Result, r.Status, r.StatusMsg)
 	default:
-		log.Fatal("usage: duo enroll USERNAME | duo status USER_ID LINK | duo auth USER_ID USERNAME")
+		log.Fatal("usage: duo enroll USERNAME [CAMERA_PNG] | duo status USER_ID LINK | duo auth USER_ID USERNAME | duo qr TEXT CAMERA_PNG")
 	}
 }
 
@@ -111,6 +140,33 @@ func call(path string, params map[string]string, response any) {
 		log.Fatalf("%s: %s", path, raw)
 	}
 	check(json.Unmarshal(out.Response, response))
+}
+
+// writeCameraImage writes code where the emulator's back camera (hw.camera.back
+// orientation 90, -camera-back imagefile:) shows all of it. The emulator scales
+// the image so its height fills the frame's 640 px width, shows only the left
+// three quarters of the image's height in width, and turns it; so code goes in
+// the middle of that part, on white.
+func writeCameraImage(path string, code image.Image) {
+	side := code.Bounds().Dx()
+	img := image.NewGray(image.Rect(0, 0, side*8/3, side*2))
+	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
+	at := image.Pt(side/4, side/2)
+	draw.Draw(img, code.Bounds().Sub(code.Bounds().Min).Add(at), code, code.Bounds().Min, draw.Src)
+	f, err := os.Create(path)
+	check(err)
+	check(png.Encode(f, img))
+	check(f.Close())
+}
+
+// withQuietZone adds the 4-module (24 px) white border the server's QR codes have.
+func withQuietZone(code image.Image) image.Image {
+	const quiet = 24
+	b := code.Bounds()
+	img := image.NewGray(image.Rect(0, 0, b.Dx()+2*quiet, b.Dy()+2*quiet))
+	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
+	draw.Draw(img, b.Sub(b.Min).Add(image.Pt(quiet, quiet)), code, b.Min, draw.Src)
+	return img
 }
 
 func env(name string) string {
