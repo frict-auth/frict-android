@@ -4,12 +4,17 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly scan of main between Dependabot's monthly runs: vulnerabilities and codeql only.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   build:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -25,6 +30,7 @@ jobs:
       - run: scripts/check-debug-signing.sh
 
   unit:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -44,6 +50,7 @@ jobs:
           path: app/build/reports/tests
 
   lint:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -98,6 +105,7 @@ jobs:
           args: scan source --lockfile app/gradle.lockfile
 
   emulator:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
