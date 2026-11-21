@@ -138,16 +138,19 @@ jobs:
           if [[ ${{ matrix.variant }} == emu37213 || ${{ matrix.variant }} == both ]]; then
             curl -fsSL -o "$RUNNER_TEMP/emu.zip" https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip
             echo "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd  $RUNNER_TEMP/emu.zip" | sha256sum -c
-            cp "$sdk/emulator/package.xml" "$RUNNER_TEMP/emu-package.xml"
             sudo rm -rf "$sdk/emulator"; unzip -q "$RUNNER_TEMP/emu.zip" -d "$sdk"
-            sed 's|<major>[0-9]*</major><minor>[0-9]*</minor><micro>[0-9]*</micro>|<major>37</major><minor>2</minor><micro>13</micro>|' "$RUNNER_TEMP/emu-package.xml" > "$sdk/emulator/package.xml"
+            printf '%s\n' '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' \
+              '<ns2:repository xmlns:ns2="http://schemas.android.com/repository/android/common/02" xmlns:ns5="http://schemas.android.com/repository/android/generic/02" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' \
+              '<localPackage path="emulator" obsolete="false"><type-details xsi:type="ns5:genericDetailsType"/><revision><major>37</major><minor>2</minor><micro>13</micro></revision><display-name>Android Emulator</display-name></localPackage>' \
+              '</ns2:repository>' > "$sdk/emulator/package.xml"
           fi
           if [[ ${{ matrix.variant }} == clt22 || ${{ matrix.variant }} == both ]]; then
             curl -fsSL -o "$RUNNER_TEMP/clt.zip" https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
             echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $RUNNER_TEMP/clt.zip" | sha256sum -c
             sudo rm -rf "$sdk/cmdline-tools/latest"; unzip -q "$RUNNER_TEMP/clt.zip" -d "$RUNNER_TEMP/clt"; sudo mv "$RUNNER_TEMP/clt/cmdline-tools" "$sdk/cmdline-tools/latest"
           fi
-          "$sdk/emulator/emulator" -version | head -1
+          ls "$sdk" "$sdk/cmdline-tools"
+          [[ ! -x $sdk/emulator/emulator ]] || "$sdk/emulator/emulator" -version | head -1
           "$sdk/cmdline-tools/latest/bin/sdkmanager" --version
       - name: boot an emulator, run the instrumented tests and the e2e
         run: scripts/emulator.sh
