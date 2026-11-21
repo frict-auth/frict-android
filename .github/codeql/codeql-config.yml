@@ -1,3 +1,5 @@
+name: frict-android
+
 # The codeql CI job fails on any finding. Fix the code; a finding that is a
 # real false positive is suppressed here, by rule id, where review sees it:
 #
