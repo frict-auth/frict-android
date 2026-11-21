@@ -14,7 +14,11 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 : "${ANDROID_HOME:?set ANDROID_HOME to the Android SDK}"
 export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/platform-tools:$PATH
 
-IMAGE=${IMAGE:-"system-images;android-36;google_apis;x86_64"}
+# The 4 KB page size Google APIs images ship Play services too old for
+# firebase-messaging (26.11 on API 37.0); this one ships 26.22.
+IMAGE=${IMAGE:-"system-images;android-37.1;google_apis_ps16k;x86_64"}
+# firebase-messaging's minimum: "Google Play services out of date ... Requires 261200000".
+MIN_GMS_VERSION_CODE=261200000
 AVD=${AVD:-frict-test}
 PORT=${PORT:-5554}
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-300}
@@ -139,6 +143,10 @@ until [[ $(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]
   sleep 2
 done
 echo "$ANDROID_SERIAL booted in $((SECONDS - start))s: API $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+gms=$(adb shell dumpsys package com.google.android.gms | grep -m1 -o 'versionCode=[0-9]*')
+adb shell dumpsys package com.google.android.gms | grep -m1 versionName
+((${gms#versionCode=} >= MIN_GMS_VERSION_CODE)) \
+  || { echo "Play services $gms is older than $MIN_GMS_VERSION_CODE" >&2; exit 1; }
 
 adb_root
 adb shell svc power stayon true
