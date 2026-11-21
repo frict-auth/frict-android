@@ -127,6 +127,8 @@ adb shell "mkdir -p /data/misc/user/0/cacerts-added && mv /data/local/tmp/$ca_na
 
 (cd "$ROOT" && ./gradlew installDebug --console=plain -q)
 adb shell pm clear "$PACKAGE" >/dev/null
+# The server is 10.0.2.2, which Android 17 treats as local network.
+adb shell pm grant "$PACKAGE" android.permission.ACCESS_LOCAL_NETWORK
 
 link=$(duo enroll android-e2e)
 user_id=$(sed -n 's/.*[?&]user_id=\([^&]*\).*/\1/p' <<<"$link")
