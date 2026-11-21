@@ -21,6 +21,13 @@ a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
 
+## Static analysis
+
+The `codeql` CI job runs CodeQL's default Java/Kotlin queries over the
+`assembleDebug` build, with dependency verification on, and fails on any
+finding. Fix the code; a false positive is suppressed by rule id in
+`.github/codeql/codeql-config.yml`, nowhere else.
+
 ## Dependencies
 
 Gradle verifies every artifact it resolves, plugins and build tooling

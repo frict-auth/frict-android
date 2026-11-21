@@ -251,7 +251,13 @@ class MainActivity : ComponentActivity() {
                 mainExecutor,
                 object : BiometricPrompt.AuthenticationCallback() {
                     override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                        send(c, answer, signature.asSigner())
+                        val authenticated = result.cryptoObject?.signature
+                        if (authenticated == null) {
+                            busy = false
+                            status = getString(R.string.approval_key_unavailable, "no signature in the biometric result")
+                            return
+                        }
+                        send(c, answer, authenticated.asSigner())
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
