@@ -105,6 +105,10 @@ jobs:
           args: scan source --lockfile app/gradle.lockfile
 
   emulator:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [base, emu37213, clt22, both]
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
@@ -127,12 +131,30 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - name: experiment variant
+        run: |
+          set -euo pipefail
+          sdk=$ANDROID_HOME
+          if [[ ${{ matrix.variant }} == emu37213 || ${{ matrix.variant }} == both ]]; then
+            curl -fsSL -o "$RUNNER_TEMP/emu.zip" https://dl.google.com/android/repository/emulator-linux_x64-16740729.zip
+            echo "cbc7c3cfb83220b8a0f9c513fdab557712e74d339ec19ddffa43f23350ae9bdd  $RUNNER_TEMP/emu.zip" | sha256sum -c
+            cp "$sdk/emulator/package.xml" "$RUNNER_TEMP/emu-package.xml"
+            sudo rm -rf "$sdk/emulator"; unzip -q "$RUNNER_TEMP/emu.zip" -d "$sdk"
+            sed 's|<major>[0-9]*</major><minor>[0-9]*</minor><micro>[0-9]*</micro>|<major>37</major><minor>2</minor><micro>13</micro>|' "$RUNNER_TEMP/emu-package.xml" > "$sdk/emulator/package.xml"
+          fi
+          if [[ ${{ matrix.variant }} == clt22 || ${{ matrix.variant }} == both ]]; then
+            curl -fsSL -o "$RUNNER_TEMP/clt.zip" https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+            echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $RUNNER_TEMP/clt.zip" | sha256sum -c
+            sudo rm -rf "$sdk/cmdline-tools/latest"; unzip -q "$RUNNER_TEMP/clt.zip" -d "$RUNNER_TEMP/clt"; sudo mv "$RUNNER_TEMP/clt/cmdline-tools" "$sdk/cmdline-tools/latest"
+          fi
+          "$sdk/emulator/emulator" -version | head -1
+          "$sdk/cmdline-tools/latest/bin/sdkmanager" --version
       - name: boot an emulator, run the instrumented tests and the e2e
         run: scripts/emulator.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
-          name: emulator-diagnostics
+          name: emulator-diagnostics-${{ matrix.variant }}
           path: |
             app/build/emulator-diagnostics
             app/build/reports/androidTests
