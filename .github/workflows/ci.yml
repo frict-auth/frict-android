@@ -127,6 +127,15 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      # The runner's cmdline-tools 12.0 misreads the API 37.1 image: its AVD
+      # gets 96 MB of RAM and crashes SurfaceFlinger. Same pin as the agent VM.
+      - name: cmdline-tools 22.0
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/cmdline-tools.zip" https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+          echo "4e4c464f145a7512b57d088ac6c278c03c9eea610886b35a5e0804e74eedf583  $RUNNER_TEMP/cmdline-tools.zip" | sha256sum -c
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdline-tools"
+          sudo rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+          sudo mv "$RUNNER_TEMP/cmdline-tools/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
       - name: boot an emulator, run the instrumented tests and the e2e
         run: scripts/emulator.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

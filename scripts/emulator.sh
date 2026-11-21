@@ -131,10 +131,8 @@ avd_path=$(avdmanager list avd | sed -n "s|^ *Path: \(.*/$AVD\.avd\)$|\1|p")
 export ANDROID_AVD_HOME=${avd_path%/*}
 
 mkdir -p "$ROOT/app/build"
-# The runner's avdmanager (cmdline-tools 12.0) gives this image 96 MB of RAM,
-# on which it never boots.
 emulator -avd "$AVD" -port "$PORT" -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -no-metrics \
-  -memory 2048 -partition-size 10240 -gpu swiftshader_indirect -accel on >"$EMULATOR_LOG" 2>&1 &
+  -gpu swiftshader_indirect -accel on >"$EMULATOR_LOG" 2>&1 &
 emu_pid=$!
 trap on_exit EXIT
 
