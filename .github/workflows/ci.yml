@@ -62,6 +62,30 @@ jobs:
           name: lint-report
           path: app/build/reports/lint-results-debug.*
 
+  codeql:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          config-file: .github/codeql/codeql-config.yml
+      - run: ./gradlew --no-daemon assembleDebug --console=plain
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          upload: never
+          output: sarif
+      - run: scripts/codeql-findings.sh sarif/*.sarif
+
   vulnerabilities:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
