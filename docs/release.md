@@ -94,7 +94,9 @@ certificates; the upload key's must match step 1's.
 
 In the prod project. The provider admits only frict-android's
 `repository_id`; the binding admits only jobs in the `release` environment,
-i.e. on `main`.
+i.e. on `main`. The binding matches the `environment` claim, not `sub`, whose
+format differs for repos created after 2026-07-15. The service-account
+commands call the IAM API, hence `iam.googleapis.com`.
 
 ```
 P=<prod-project-id>
@@ -110,13 +112,13 @@ gcloud iam workload-identity-pools create github-actions --project=$P \
 gcloud iam workload-identity-pools providers create-oidc github --project=$P \
   --location=global --workload-identity-pool=github-actions \
   --issuer-uri=https://token.actions.githubusercontent.com \
-  --attribute-mapping=google.subject=assertion.sub,attribute.repository_id=assertion.repository_id \
+  --attribute-mapping=google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.environment=assertion.environment \
   --attribute-condition="assertion.repository_id=='1440746369'"
 gcloud iam service-accounts create frict-play-release --project=$P \
   --display-name="Frict Play release (GitHub Actions)"
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$P \
   --role=roles/iam.workloadIdentityUser \
-  --member="principal://iam.googleapis.com/$POOL/subject/repo:frict-auth/frict-android:environment:release"
+  --member="principalSet://iam.googleapis.com/$POOL/attribute.environment/release"
 
 R=frict-auth/frict-android
 gh variable set PLAY_WIF_PROVIDER --env release -R $R --body "$POOL/providers/github"
