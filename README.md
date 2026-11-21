@@ -31,6 +31,14 @@ a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
 
+## Releases
+
+A squash-merged PR titled `feat:` or `fix:` (Conventional Commits) releases:
+semantic-release tags the version, and `.github/workflows/release.yml` builds
+the AAB signed with the upload key and publishes it to Play's internal track.
+Other titles release nothing. Setup, signing and the first upload:
+[docs/release.md](docs/release.md).
+
 ## Static analysis
 
 The `codeql` CI job runs CodeQL's default Java/Kotlin queries over the
@@ -55,14 +63,14 @@ After changing a dependency, regenerate both files:
 ```
 rm gradle/verification-metadata.xml
 ./gradlew --write-verification-metadata sha256 --write-locks --refresh-dependencies \
-  assembleDebug assembleRelease testDebugUnitTest lintDebug assembleDebugAndroidTest :app:dependencies
+  assembleDebug testDebugUnitTest lintDebug assembleDebugAndroidTest :app:dependencies
 ```
 
 The diff of the two files is what the reviewer checks: every new or changed
 artifact, with its checksum.
 
-Dependabot proposes Gradle and Actions updates monthly, once a release is 7
-days old. It updates `gradle.lockfile` but not the verification metadata, so
+Dependabot proposes Gradle, Actions and npm (semantic-release) updates
+monthly, once a release is 7 days old. It updates `gradle.lockfile` but not the verification metadata, so
 its Gradle PRs fail CI until someone runs the command above on the Dependabot
 branch and pushes the result. It doesn't update the OSV-Scanner image either
 (it skips `docker://` references); bump that by hand.
@@ -114,8 +122,9 @@ survives both.
 ## Push
 
 Only the debug build (`app.frict.android.dev`) has a `google-services.json`,
-for the dev Firebase project; release builds without one, with a warning, and
-runs poll-only until the release project exists. On every start the app
+for the dev Firebase project. A release build fails without
+`app/src/release/google-services.json`, which comes from the prod Firebase
+project (see [docs/release.md](docs/release.md)). On every start the app
 registers with FCM and sends its FID to `/device/v1/fid`, signed with the
 `device_key`; FCM's `onRegistered` sends a new one the same way.
 
