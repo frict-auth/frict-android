@@ -60,8 +60,8 @@ fun enrollBody(code: String, keys: EnrollmentKeys, fid: String): ByteArray = JSO
 
 private fun b64url(der: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(der)
 
-/** The enrolled user and the API host that enrolled it. */
-data class Account(val host: String, val userId: String)
+/** The enrolled user, the API host that enrolled it, and what unlocks its approval_key. */
+data class Account(val host: String, val userId: String, val unlockMode: UnlockMode)
 
 interface AccountStore {
     fun load(): Account?
@@ -92,11 +92,11 @@ class Enroller(
     private val fid: () -> String,
     private val unixSeconds: () -> Long,
 ) {
-    fun enroll(link: String): EnrollResult {
+    fun enroll(link: String, mode: UnlockMode): EnrollResult {
         if (store.load() != null) return EnrollResult.AlreadyEnrolled
         val activation = parseActivation(link) ?: return EnrollResult.NotAnActivationLink
         val newKeys = try {
-            keys.create(activation.code.toByteArray(Charsets.UTF_8))
+            keys.create(activation.code.toByteArray(Charsets.UTF_8), mode)
         } catch (e: Exception) {
             return EnrollResult.KeysUnavailable(e.message ?: e.javaClass.simpleName)
         }
@@ -105,11 +105,21 @@ class Enroller(
         return when (val response = api(activation.host).post(ENROLL_PATH, body, auth)) {
             is DeviceResponse.NetworkError -> EnrollResult.NetworkError(response.message)
             is DeviceResponse.Ok -> when (response.status) {
-                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId).let {
+                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode).let {
                     if (store.save(it)) EnrollResult.Enrolled(it) else EnrollResult.NotSaved
                 }
                 else -> EnrollResult.Rejected(response.status)
             }
         }
     }
+}
+
+/**
+ * Why this device can't enroll with [mode], as a string resource, or null if it can.
+ * Every approval_key needs a secure screen lock.
+ */
+fun enrollBlocker(mode: UnlockMode, screenLock: Boolean, strongBiometric: Boolean): Int? = when {
+    !screenLock -> R.string.needs_screen_lock
+    mode == UnlockMode.FINGERPRINT_ONLY && !strongBiometric -> R.string.needs_biometric
+    else -> null
 }

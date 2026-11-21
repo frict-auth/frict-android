@@ -13,10 +13,12 @@ Needs JDK 21 and an Android SDK in `ANDROID_HOME`.
 scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the e2e
 ```
 
-The emulator gets a PIN and an enrolled fingerprint first: Keystore creates
-the `approval_key` only once a strong biometric is enrolled. The e2e
-(`scripts/e2e.sh`, needs docker) enrolls, approves a login and denies one as
-"not me", driving the app and the fingerprint sensor. It runs frict-server at
+The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
+twice. `screen-lock`, before any fingerprint exists, enrolls with the default
+unlock and approves a login by typing the PIN. Then a fingerprint is enrolled,
+the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
+approves a login and denies one as "not me" with the fingerprint sensor. It
+runs frict-server at
 a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.
@@ -64,6 +66,24 @@ The app enrolls from an activation link
 opened as a link or pasted. It creates the `device_key` and `approval_key`
 with the activation code as attestation challenge, sends the enroll request
 signed with the `device_key`, and saves the user once the server accepts it.
+
+Before enrolling, the user picks what unlocks the `approval_key`:
+
+| Unlock | Key (`setUserAuthenticationParameters(0, …)`) | Needs |
+| --- | --- | --- |
+| Fingerprint or screen lock (default) | `AUTH_BIOMETRIC_STRONG \| AUTH_DEVICE_CREDENTIAL` | a secure screen lock |
+| Fingerprint only | `AUTH_BIOMETRIC_STRONG` | a secure screen lock and an enrolled strong biometric |
+
+Keystore fixes a key's unlock when it creates it, so the choice is saved with
+the account (not a secret) and shown on the main screen; changing it means
+enrolling again, with a new activation code. An account saved before the
+choice existed shows "Fingerprint only", which is what its key requires.
+
+"Fingerprint" is Android's strong (Class 3) biometric: a Class 3 face unlock
+works too. Removing the screen lock invalidates either key. Adding a
+fingerprint, or removing them all, invalidates a "Fingerprint only" key; a
+"Fingerprint or screen lock" key is bound to the screen lock alone and
+survives both.
 Until push lands, it sends the placeholder FID `no-fid-yet`.
 
 ## Approving a login
@@ -71,10 +91,12 @@ Until push lands, it sends the placeholder FID `no-fid-yet`.
 While the app is open and enrolled, it polls `pending` at the server's
 `poll_interval`, signed with the `device_key`, and shows the oldest pending
 challenge's details (user, IP address, Authentik's pushinfo). Approve, Deny
-(`cancel`) and Not me (`not_me`) each open a BiometricPrompt that allows only
-a strong biometric and is bound to a `Signature` over the `approval_key`;
-Keystore lets that key sign only after the prompt succeeds, and only the
-answer is signed with it. An answer the server refuses as already answered or
+(`cancel`) and Not me (`not_me`) each open a BiometricPrompt bound to a
+`Signature` over the `approval_key`, allowing what the key allows
+(`BIOMETRIC_STRONG`, plus `DEVICE_CREDENTIAL` for "Fingerprint or screen
+lock", which replaces the Back button: the platform forbids both). Keystore
+lets that key sign only after the prompt succeeds, and only the answer is
+signed with the prompt's result. An answer the server refuses as already answered or
 expired is shown as such, not retried.
 
 ## Debug keystore

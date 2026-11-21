@@ -32,12 +32,19 @@ ui_dump() {
   return 1
 }
 
+# dismiss_anr SCREEN: taps Wait if SCREEN (a ui_dump) shows an "isn't
+# responding" dialog, which a loaded machine raises now and then.
+dismiss_anr() {
+  if grep -qiF "isn't responding\"" <<<"$1"; then tap_text Wait; fi
+}
+
 # wait_for_text TEXT [SECONDS]: waits until a node's text is exactly TEXT, ignoring case.
 wait_for_text() {
   local i screen
   for ((i = 0; i < ${2:-30}; i++)); do
     screen=$(ui_dump)
     if grep -qiF "text=\"$1\"" <<<"$screen"; then return 0; fi
+    dismiss_anr "$screen"
     sleep 1
   done
   echo "no \"$1\" on screen within ${2:-30}s; it shows:" >&2
@@ -69,6 +76,29 @@ wait_unlocked() {
   return 1
 }
 
+# unlock_screen PIN: unlocks a PIN keyguard, which can come up any time once a
+# PIN is set.
+unlock_screen() {
+  local i screen
+  for ((i = 0; i < 5; i++)); do
+    screen=$(ui_dump)
+    if ! grep -q 'resource-id="com.android.systemui:id/keyguard_root_view"' <<<"$screen"; then
+      grep -qiF "isn't responding\"" <<<"$screen" || return 0
+      tap_text Wait
+      sleep 1
+      continue
+    fi
+    adb shell input keyevent KEYCODE_WAKEUP
+    adb shell wm dismiss-keyguard
+    sleep 1
+    adb shell input text "$1"
+    adb shell input keyevent KEYCODE_ENTER
+    sleep 2
+  done
+  echo "the keyguard is still showing after entering the PIN 5 times" >&2
+  return 1
+}
+
 # touch_fingerprint_until_gone TEXT: touches the emulator's fingerprint sensor
 # with the enrolled finger until TEXT (a biometric prompt's) leaves the screen.
 touch_fingerprint_until_gone() {
@@ -82,6 +112,22 @@ touch_fingerprint_until_gone() {
     sleep 1
   done
   echo "\"$1\" is still on screen after 10 fingerprint touches" >&2
+  return 1
+}
+
+# enter_pin_until_gone TEXT PIN: types PIN into the screen lock check of the
+# prompt titled TEXT until the prompt leaves the screen.
+enter_pin_until_gone() {
+  local i screen
+  for ((i = 0; i < 3; i++)); do
+    screen=$(ui_dump)
+    if ! grep -qiF "text=\"$1\"" <<<"$screen"; then return 0; fi
+    adb shell input text "$2"
+    adb shell input keyevent KEYCODE_ENTER
+    sleep 2
+  done
+  echo "\"$1\" is still on screen after entering the PIN 3 times; it shows:" >&2
+  grep -o 'text="[^"]\+"' <<<"$screen" >&2
   return 1
 }
 

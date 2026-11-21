@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Boots a headless emulator, gives it a PIN and an enrolled fingerprint, runs
-# the instrumented tests and the e2e (scripts/e2e.sh) on it,
-# and stops it. On failure it saves the screen, a screenshot and logcat to
+# Boots a headless emulator and gives it a PIN; runs the screen-lock e2e
+# (scripts/e2e.sh) before any fingerprint exists; enrolls a fingerprint; runs
+# the instrumented tests and the fingerprint e2e; and stops it. On failure it saves the screen, a screenshot and logcat to
 # DIAGNOSTICS_DIR.
 #
 # Usage: scripts/emulator.sh
@@ -21,7 +21,7 @@ BOOT_TIMEOUT=${BOOT_TIMEOUT:-300}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 EMULATOR_LOG=$ROOT/app/build/emulator.log
 export ANDROID_SERIAL=emulator-$PORT
-PIN=1111
+export PIN=1111
 
 . "$ROOT/scripts/adb.sh"
 
@@ -38,14 +38,12 @@ capture_diagnostics() {
   echo "diagnostics saved to $DIAGNOSTICS_DIR" >&2
 }
 
-# Through Settings, as a user would: Keystore only creates the approval_key once
-# a strong biometric is enrolled. Right after boot Settings can stall or stop
-# responding, so a stalled attempt starts it over, and success is the
-# fingerprint service's own count, not what the screen shows.
+# Through Settings, as a user would: Keystore only creates a fingerprint-only
+# approval_key once a strong biometric is enrolled. Right after boot Settings
+# can stall or stop responding, so a stalled attempt starts it over, and
+# success is the fingerprint service's own count, not what the screen shows.
 enroll_fingerprint() {
   local attempt screen
-  wait_unlocked
-  adb shell locksettings set-pin "$PIN" >/dev/null
   for ((attempt = 1; attempt <= 3; attempt++)); do
     if fingerprint_enroll_attempt; then
       adb shell am force-stop com.android.settings
@@ -74,7 +72,7 @@ fingerprint_enroll_attempt() {
     fingerprint_enrolled && return 0
     screen=$(ui_dump) || return 1
     if grep -qiF "isn't responding\"" <<<"$screen"; then
-      tap_text Wait
+      dismiss_anr "$screen"
     elif [[ -z $pin_entered ]] && grep -qiF 'text="Re-enter your PIN"' <<<"$screen"; then
       adb shell input text "$PIN"
       adb shell input keyevent KEYCODE_ENTER
@@ -144,8 +142,12 @@ echo "$ANDROID_SERIAL booted in $((SECONDS - start))s: API $(adb shell getprop r
 
 adb_root
 adb shell svc power stayon true
+wait_unlocked
+adb shell locksettings set-pin "$PIN" >/dev/null
+! fingerprint_enrolled || { echo "a fingerprint is enrolled before the screen-lock e2e" >&2; exit 1; }
+"$ROOT/scripts/e2e.sh" screen-lock
+
 enroll_fingerprint
 echo "fingerprint enrolled"
-
 (cd "$ROOT" && ./gradlew connectedDebugAndroidTest --console=plain)
-"$ROOT/scripts/e2e.sh"
+"$ROOT/scripts/e2e.sh" fingerprint

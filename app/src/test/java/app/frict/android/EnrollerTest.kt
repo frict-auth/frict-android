@@ -29,11 +29,13 @@ class SoftwareKeyMaker : KeyMaker {
     lateinit var device: KeyPair
     lateinit var approval: KeyPair
     lateinit var challenge: ByteArray
+    lateinit var mode: UnlockMode
 
-    override fun create(attestationChallenge: ByteArray): EnrollmentKeys {
+    override fun create(attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys {
         device = p256()
         approval = p256()
         challenge = attestationChallenge
+        this.mode = mode
         return EnrollmentKeys(
             deviceKey = device.public.encoded,
             approvalKey = approval.public.encoded,
@@ -72,15 +74,28 @@ class EnrollerTest {
 
     @Test
     fun enrollsAndSavesTheActivationsUser() {
-        assertEquals(EnrollResult.Enrolled(Account("api.frict.test", USER_ID)), enroller.enroll(link))
-        assertEquals(Account("api.frict.test", USER_ID), store.account)
+        val want = Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
+        assertEquals(EnrollResult.Enrolled(want), enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK))
+        assertEquals(want, store.account)
         assertEquals(listOf("api.frict.test"), hosts)
         assertEquals(ENROLL_PATH, server.requests.single().path)
     }
 
     @Test
+    fun makesTheApprovalKeyAndSavesTheAccountWithTheChosenMode() {
+        for (mode in UnlockMode.entries) {
+            val modeStore = MemoryAccountStore()
+            FakeFrictServer(USER_ID, CODE).use { s ->
+                Enroller(keys, modeStore, { DeviceApi(s.url) }, { "fid-1" }, { NOW }).enroll(link, mode)
+            }
+            assertEquals(mode, keys.mode)
+            assertEquals(mode, modeStore.account?.unlockMode)
+        }
+    }
+
+    @Test
     fun signsWithDeviceKeyNotApprovalKey() {
-        enroller.enroll(link)
+        enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
         val r = server.requests.single()
         val (user, unix, sig) = r.authorization.removePrefix("Frict-P256 ").split(':')
         assertEquals(USER_ID, user)
@@ -97,7 +112,7 @@ class EnrollerTest {
 
     @Test
     fun bodyCarriesEveryProtocolField() {
-        enroller.enroll(link)
+        enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
         val body = server.requests.single().json
         assertEquals(setOf("activation_code", "device_key", "approval_key", "attestation", "fid"), body.keys().asSequence().toSet())
         assertEquals(CODE, body.getString("activation_code"))
@@ -113,7 +128,7 @@ class EnrollerTest {
 
     @Test
     fun attestationChallengeIsTheActivationCode() {
-        enroller.enroll(link)
+        enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
         assertArrayEquals(CODE.toByteArray(), keys.challenge)
     }
 
@@ -121,15 +136,15 @@ class EnrollerTest {
     fun refusedEnrollmentSavesNothing() {
         FakeFrictServer(USER_ID, "SOMEOTHERCODE").use { other ->
             val e = Enroller(keys, store, { DeviceApi(other.url) }, { "fid-1" }, { NOW })
-            assertEquals(EnrollResult.Rejected(401), e.enroll(link))
+            assertEquals(EnrollResult.Rejected(401), e.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK))
         }
         assertNull(store.account)
     }
 
     @Test
     fun alreadyEnrolledSendsNothing() {
-        store.account = Account("old.host", "DU234567234567234567234567AB")
-        assertEquals(EnrollResult.AlreadyEnrolled, enroller.enroll(link))
+        store.account = Account("old.host", "DU234567234567234567234567AB", UnlockMode.FINGERPRINT_ONLY)
+        assertEquals(EnrollResult.AlreadyEnrolled, enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK))
         assertTrue(server.requests.isEmpty())
     }
 
@@ -138,7 +153,7 @@ class EnrollerTest {
         val port = server.url.substringAfterLast(':')
         server.close()
         val e = Enroller(keys, store, { DeviceApi("http://127.0.0.1:$port") }, { "fid-1" }, { NOW })
-        assertTrue(e.enroll(link) is EnrollResult.NetworkError)
+        assertTrue(e.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK) is EnrollResult.NetworkError)
         assertNull(store.account)
     }
 }
