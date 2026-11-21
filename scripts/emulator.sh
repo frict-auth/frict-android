@@ -24,6 +24,8 @@ PORT=${PORT:-5554}
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-300}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 EMULATOR_LOG=$ROOT/app/build/emulator.log
+# What the back camera sees; scripts/e2e.sh writes it.
+export CAMERA_IMAGE=$ROOT/app/build/camera-back.png
 export ANDROID_SERIAL=emulator-$PORT
 export PIN=1111
 
@@ -132,7 +134,7 @@ export ANDROID_AVD_HOME=${avd_path%/*}
 
 mkdir -p "$ROOT/app/build"
 emulator -avd "$AVD" -port "$PORT" -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data -no-metrics \
-  -gpu swiftshader_indirect -accel on >"$EMULATOR_LOG" 2>&1 &
+  -gpu swiftshader_indirect -accel on -camera-back "imagefile:$CAMERA_IMAGE" >"$EMULATOR_LOG" 2>&1 &
 emu_pid=$!
 trap on_exit EXIT
 

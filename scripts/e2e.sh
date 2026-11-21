@@ -3,9 +3,14 @@
 # behind TLS from a throwaway test CA on 127.0.0.1:443, which the emulator
 # reaches as 10.0.2.2. Every server call is Duo-signed, as Authentik makes it.
 #
-# 1. Enroll: creates an activation (/auth/v2/enroll), opens the link in the
-#    debug app, picks MODE's unlock, taps Enroll, and requires
-#    /auth/v2/enroll_status to go from waiting to success.
+# 1. Enroll: creates an activation (/auth/v2/enroll) and hands the debug app
+#    its link, picks MODE's unlock, taps Enroll, and requires
+#    /auth/v2/enroll_status to go from waiting to success. fingerprint opens
+#    the link; screen-lock scans the server's QR code of it with the emulator's
+#    back camera (CAMERA_IMAGE, scripts/emulator.sh's -camera-back image), after
+#    refusing the camera once, rejecting a QR code that is not an activation
+#    link, and requiring the camera to close when the app leaves the screen and
+#    once the link is scanned.
 #    The server must hold the app's Firebase Installation ID, registered with
 #    Firebase (which the dev API key's package and certificate restriction
 #    allows), and get it again on the app's next start.
@@ -33,7 +38,7 @@
 # lock PIN; fingerprint also needs a strong biometric enrolled
 # (scripts/emulator.sh does both).
 #
-# Usage: PIN=… scripts/e2e.sh screen-lock|fingerprint
+# Usage: PIN=… CAMERA_IMAGE=… scripts/e2e.sh screen-lock|fingerprint
 set -Eeuo pipefail
 trap 'echo "$0: line $LINENO: \"$BASH_COMMAND\" failed" >&2' ERR
 
@@ -198,6 +203,49 @@ open_notification() {
   return 1
 }
 
+# camera_is APP_STATE: waits until the app has a camera open (open) or none (closed).
+camera_is() {
+  local i cameras open
+  for ((i = 0; i < 15; i++)); do
+    cameras=$(adb shell dumpsys media.camera)
+    if grep -qF "Client Package Name: $PACKAGE" <<<"$cameras"; then open=open; else open=closed; fi
+    [[ $open == "$1" ]] && return 0
+    sleep 1
+  done
+  echo "the app's camera is $open after 15s, want $1" >&2
+  return 1
+}
+
+# scan_enrollment CAMERA_PNG: has the app scan the activation's QR code,
+# CAMERA_PNG, with the back camera, as a user would, and the failure paths
+# before it.
+scan_enrollment() {
+  duo qr "https://$API_HOST/enroll?code=e2e&host=$API_HOST&user_id=$user_id" "$CAMERA_IMAGE"
+  adb shell am start -W -n "$PACKAGE/$ACTIVITY" >/dev/null
+  wait_for_text "Scan QR code"
+  tap_text "Scan QR code"
+  wait_for_text "Don’t allow"
+  tap_text "Don’t allow"
+  wait_for_text "Without the camera, paste the activation link below or open it as a link on this phone."
+  camera_is closed
+  echo "camera refused: the app offers the link instead"
+  tap_text "Scan QR code"
+  wait_for_text "While using the app"
+  tap_text "While using the app"
+  wait_for_text "That QR code is not a Frict activation link. It was not opened." 30
+  camera_is open
+  echo "a QR code that is not an activation link is rejected; the camera stays on"
+  adb shell input keyevent KEYCODE_HOME
+  camera_is closed
+  echo "the camera closes when the app leaves the screen"
+  # The emulator reads the image each time the camera opens.
+  cp "$1" "$CAMERA_IMAGE"
+  adb shell am start -W -n "$PACKAGE/$ACTIVITY" >/dev/null
+  wait_for_text "Activation link scanned. Choose how to approve sign-ins, then tap Enroll." 30
+  camera_is closed
+  echo "activation link scanned; the camera closed"
+}
+
 # Android trusts user-added CAs from this directory, named by OpenSSL's old subject hash.
 ca_name=$(openssl x509 -subject_hash_old -noout -in "$secrets/ca.pem").0
 adb_root
@@ -213,7 +261,12 @@ adb shell pm grant "$PACKAGE" android.permission.ACCESS_LOCAL_NETWORK
 adb shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS
 echo "Google Play services: $(adb shell dumpsys package com.google.android.gms | tr -d '\r' | sed -n 's/^ *versionName=//p' | head -1)"
 
-link=$(duo enroll android-e2e)
+if [[ $MODE == screen-lock ]]; then
+  : "${CAMERA_IMAGE:?set CAMERA_IMAGE to the -camera-back imagefile of the emulator}"
+  link=$(duo enroll android-e2e "$work/activation-qr.png")
+else
+  link=$(duo enroll android-e2e)
+fi
 user_id=$(sed -n 's/.*[?&]user_id=\([^&]*\).*/\1/p' <<<"$link")
 echo "activation for $user_id"
 before=$(duo status "$user_id" "$link")
@@ -221,7 +274,11 @@ before=$(duo status "$user_id" "$link")
 
 disable_soft_keyboards
 unlock_screen "$PIN"
-adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
+if [[ $MODE == screen-lock ]]; then
+  scan_enrollment "$work/activation-qr.png"
+else
+  adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
+fi
 wait_for_text Enroll
 [[ $MODE == fingerprint ]] && tap_text "$MODE_LABEL"
 tap_text Enroll
