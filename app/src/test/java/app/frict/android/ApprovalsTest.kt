@@ -41,7 +41,7 @@ class ApprovalsTest {
     private val server = FakeFrictServer(USER_ID, "unused")
     private val device = p256()
     private val approval = p256()
-    private val approvals = Approvals(Account("api.frict.test", USER_ID), DeviceApi(server.url), signerOf(device), { NOW })
+    private val approvals = Approvals(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY), DeviceApi(server.url), signerOf(device), { NOW })
 
     init {
         server.enrolled(device.public, approval.public)

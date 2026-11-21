@@ -1,5 +1,6 @@
 package app.frict.android
 
+import android.hardware.biometrics.BiometricManager.Authenticators
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
@@ -13,6 +14,23 @@ const val DEVICE_KEY_ALIAS = "device_key"
 const val APPROVAL_KEY_ALIAS = "approval_key"
 private const val KEYSTORE = "AndroidKeyStore"
 
+/**
+ * What unlocks the approval_key, fixed when the key is made: changing it means enrolling
+ * again. [keyAuthTypes] are the key's KeyProperties.AUTH_* types; [promptAuthenticators]
+ * are the BiometricPrompt's, which must accept exactly those.
+ */
+enum class UnlockMode(val keyAuthTypes: Int, val promptAuthenticators: Int) {
+    FINGERPRINT_OR_SCREEN_LOCK(
+        KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+        Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL,
+    ),
+    FINGERPRINT_ONLY(KeyProperties.AUTH_BIOMETRIC_STRONG, Authenticators.BIOMETRIC_STRONG),
+    ;
+
+    /** The platform rejects a negative button on a prompt that offers the screen lock. */
+    val promptHasBackButton get() = promptAuthenticators and Authenticators.DEVICE_CREDENTIAL == 0
+}
+
 /** A new device_key and approval_key: public keys as SPKI DER, attestation chains leaf first. */
 class EnrollmentKeys(
     val deviceKey: ByteArray,
@@ -22,18 +40,21 @@ class EnrollmentKeys(
     val deviceSigner: Signer,
 )
 
-/** Replaces both keys with new ones whose attestations carry [attestationChallenge]. */
+/**
+ * Replaces both keys with new ones whose attestations carry [attestationChallenge]; [mode]
+ * unlocks the approval_key.
+ */
 fun interface KeyMaker {
-    fun create(attestationChallenge: ByteArray): EnrollmentKeys
+    fun create(attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys
 }
 
 fun deviceKeySpec(attestationChallenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec =
     p256SigningSpec(DEVICE_KEY_ALIAS, attestationChallenge, strongBox).build()
 
-fun approvalKeySpec(attestationChallenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec =
+fun approvalKeySpec(attestationChallenge: ByteArray, strongBox: Boolean, mode: UnlockMode): KeyGenParameterSpec =
     p256SigningSpec(APPROVAL_KEY_ALIAS, attestationChallenge, strongBox)
         .setUserAuthenticationRequired(true)
-        .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        .setUserAuthenticationParameters(0, mode.keyAuthTypes)
         .setInvalidatedByBiometricEnrollment(true)
         .build()
 
@@ -46,9 +67,9 @@ private fun p256SigningSpec(alias: String, attestationChallenge: ByteArray, stro
 
 /** Android Keystore keys, in StrongBox when [hasStrongBox] and it has room, else in the TEE. */
 class KeystoreKeyMaker(private val hasStrongBox: Boolean) : KeyMaker {
-    override fun create(attestationChallenge: ByteArray): EnrollmentKeys {
+    override fun create(attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys {
         generate(deviceKeySpec(attestationChallenge, hasStrongBox), deviceKeySpec(attestationChallenge, false))
-        generate(approvalKeySpec(attestationChallenge, hasStrongBox), approvalKeySpec(attestationChallenge, false))
+        generate(approvalKeySpec(attestationChallenge, hasStrongBox, mode), approvalKeySpec(attestationChallenge, false, mode))
         val keys = keyStore()
         val chain = { alias: String -> keys.getCertificateChain(alias).map { it.encoded } }
         return EnrollmentKeys(
@@ -92,6 +113,11 @@ fun approvalSignature(): Signature = Signature.getInstance("SHA256withECDSA").ap
 fun Signature.asSigner() = Signer { data ->
     update(data)
     sign()
+}
+
+fun deleteKeys() = keyStore().run {
+    deleteEntry(DEVICE_KEY_ALIAS)
+    deleteEntry(APPROVAL_KEY_ALIAS)
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }

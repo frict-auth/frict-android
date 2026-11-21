@@ -4,19 +4,24 @@
 # reaches as 10.0.2.2. Every server call is Duo-signed, as Authentik makes it.
 #
 # 1. Enroll: creates an activation (/auth/v2/enroll), opens the link in the
-#    debug app, taps Enroll, and requires /auth/v2/enroll_status to go from
-#    waiting to success.
+#    debug app, picks MODE's unlock, taps Enroll, and requires
+#    /auth/v2/enroll_status to go from waiting to success.
 #    The server must hold the app's Firebase Installation ID, registered with
 #    Firebase (which the dev API key's package and certificate restriction
 #    allows), and get it again on the app's next start.
-# 2. Push (only with FCM_ACCESS_TOKEN, an OAuth token for the dev Firebase
+# 2. Approve: starts a login (/auth/v2/auth), requires the app to show its
+#    details before the prompt, taps Approve, unlocks the prompt (screen-lock:
+#    types PIN; fingerprint: touches the sensor), and requires /auth to return
+#    allow.
+# screen-lock only:
+# 3. Remove: taps "Remove this phone", confirms, and requires the enrollment
+#    screen.
+# fingerprint only:
+# 3. Push (only with FCM_ACCESS_TOKEN, an OAuth token for the dev Firebase
 #    project): with the app in the background, starts a login and sends the
 #    push frict-server would, through FCM to the app's FID. Its notification
 #    must open the app on the challenge, fetched from the server, and Deny
 #    must reach /auth.
-# 3. Approve: starts a login (/auth/v2/auth), requires the app to show its
-#    details before any fingerprint, taps Approve, touches the fingerprint
-#    sensor, and requires /auth to return allow.
 # 4. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
 #    pushes after the fraud report.
@@ -24,14 +29,22 @@
 #    fraud report, with both Authentik links tappable. With FCM_ACCESS_TOKEN,
 #    the alert's push is sent first, and its notification opens the app.
 #
-# Needs docker and a booted, rootable emulator in ANDROID_SERIAL with a strong
-# biometric enrolled (scripts/emulator.sh does both).
+# Needs docker and a booted, rootable emulator in ANDROID_SERIAL with screen
+# lock PIN; fingerprint also needs a strong biometric enrolled
+# (scripts/emulator.sh does both).
 #
-# Usage: scripts/e2e.sh
+# Usage: PIN=… scripts/e2e.sh screen-lock|fingerprint
 set -Eeuo pipefail
 trap 'echo "$0: line $LINENO: \"$BASH_COMMAND\" failed" >&2' ERR
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+MODE=${1:?usage: $0 screen-lock|fingerprint}
+: "${PIN:?set PIN to the screen lock PIN of the emulator}"
+case $MODE in
+  screen-lock) MODE_LABEL="Fingerprint or screen lock" ;;
+  fingerprint) MODE_LABEL="Fingerprint only" ;;
+  *) echo "unknown mode $MODE; want screen-lock or fingerprint" >&2; exit 2 ;;
+esac
 FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-7b80fe736a33fa9f80f7af241a62d0a884df0dd0}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 : "${ANDROID_SERIAL:?set ANDROID_SERIAL to the booted emulator}"
@@ -197,6 +210,8 @@ adb shell "mkdir -p /data/misc/user/0/cacerts-added && mv /data/local/tmp/$ca_na
 
 (cd "$ROOT" && ./gradlew installDebug --console=plain -q)
 adb shell pm clear "$PACKAGE" >/dev/null
+# The server is 10.0.2.2, which Android 17 treats as local network.
+adb shell pm grant "$PACKAGE" android.permission.ACCESS_LOCAL_NETWORK
 adb shell pm grant "$PACKAGE" android.permission.POST_NOTIFICATIONS
 echo "Google Play services: $(adb shell dumpsys package com.google.android.gms | tr -d '\r' | sed -n 's/^ *versionName=//p' | head -1)"
 
@@ -207,9 +222,20 @@ before=$(duo status "$user_id" "$link")
 [[ $before == waiting ]] || { echo "enroll_status before the app enrolled: $before, want waiting" >&2; exit 1; }
 
 disable_soft_keyboards
+unlock_screen "$PIN"
 adb shell am start -W -a android.intent.action.VIEW -d "'$link'" "$PACKAGE" >/dev/null
 wait_for_text Enroll
+[[ $MODE == fingerprint ]] && tap_text "$MODE_LABEL"
 tap_text Enroll
+# Keystore attests through remote key provisioning, which can report no network
+# for a while after boot; the app shows that, and a user would tap Enroll again.
+for ((i = 0; i < 3; i++)); do
+  sleep 5
+  failed=$(grep -o 'text="Could not create keys:[^"]*"' <<<"$(ui_dump)") || break
+  echo "app shows $failed; tapping Enroll again" >&2
+  sleep 15
+  tap_text Enroll
+done
 for ((i = 0; i < 30; i++)); do
   after=$(duo status "$user_id" "$link")
   [[ $after == waiting ]] || break
@@ -218,6 +244,16 @@ done
 echo "enroll_status after the app enrolled: $after"
 [[ $after == success ]] || { echo "enroll_status after the app enrolled: $after, want success" >&2; exit 1; }
 wait_for_text "Enrolled as $user_id with $API_HOST"
+wait_for_text "Approve sign-ins with: $MODE_LABEL. To change, enroll again."
+
+# unlock_prompt TITLE: answers the prompt titled TITLE the way MODE allows.
+unlock_prompt() {
+  if [[ $MODE == fingerprint ]]; then
+    touch_fingerprint_until_gone "$1"
+  else
+    enter_pin_until_gone "$1" "$PIN"
+  fi
+}
 
 fid=$(app_fid)
 echo "the app has a Firebase-registered FID"
@@ -237,18 +273,18 @@ start_login() {
 }
 
 # answer ANSWER_BUTTON PROMPT_TITLE WANT: waits for the app to show the started
-# login, answers it with the fingerprint, and requires /auth's
+# login, answers it through the prompt, and requires /auth's
 # "<result> <status>: <status_msg>" to start with WANT.
 answer() {
   local got
-  # The details must be on screen before anything asks for a fingerprint.
+  # The details must be on screen before anything asks to unlock.
   wait_for_text "Sign-in request" 60
   wait_for_text "User: android-e2e"
   wait_for_text "From: 203.0.113.7"
   wait_for_text "Application: Frict Android e2e"
   tap_text "$1"
   wait_for_text "$2"
-  touch_fingerprint_until_gone "$2"
+  unlock_prompt "$2"
   wait "$auth_pid"
   got=$(<"$auth_out")
   echo "/auth after $1: $got"
@@ -259,6 +295,19 @@ login() {
   start_login
   answer "$@"
 }
+
+login Approve "Approve this sign-in" "allow allow:"
+wait_for_text "Approved."
+
+if [[ $MODE == screen-lock ]]; then
+  tap_text "Remove this phone"
+  wait_for_text "Remove this phone?"
+  tap_text Remove
+  wait_for_text "This phone was removed. Ask an admin to delete it in Authentik."
+  wait_for_text "Not enrolled"
+  echo "removed; back on the enrollment screen"
+  exit 0
+fi
 
 if [[ -n ${FCM_ACCESS_TOKEN:-} ]]; then
   adb shell input keyevent KEYCODE_HOME
@@ -278,8 +327,6 @@ else
   echo "FCM_ACCESS_TOKEN is unset: no push through FCM in this run"
 fi
 
-login Approve "Approve this sign-in" "allow allow:"
-wait_for_text "Approved."
 login "Not me" "Report this sign-in as not you" "deny fraud:"
 wait_for_text "Denied and reported as not you."
 paused=$(duo auth "$user_id" android-e2e)
@@ -295,6 +342,7 @@ if [[ -n ${FCM_ACCESS_TOKEN:-} ]]; then
 fi
 wait_for_text "Sign-in reported as not theirs" 30
 wait_for_text "Reported by android-e2e"
+scroll_down
 for link in "Reset password" "Revoke sessions"; do
   wait_for_text "$link"
   node=$(grep -m1 -iF "text=\"$link\"" <<<"$(ui_dump)")

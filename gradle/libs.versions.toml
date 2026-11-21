@@ -1,6 +1,6 @@
 [versions]
 agp = "9.3.1"
-kotlin = "2.2.10"
+kotlin = "2.4.21"
 activityCompose = "1.8.0"
 composeBom = "2026.02.01"
 junit = "4.13.2"
@@ -8,6 +8,7 @@ orgJson = "20260814"
 androidxJunit = "1.1.5"
 firebaseBom = "35.2.0"
 googleServices = "4.6.0"
+espressoCore = "3.7.0"
 
 [libraries]
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
@@ -16,6 +17,7 @@ androidx-compose-material3 = { group = "androidx.compose.material3", name = "mat
 androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxJunit" }
+androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }

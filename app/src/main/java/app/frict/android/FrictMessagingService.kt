@@ -3,6 +3,7 @@ package app.frict.android
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
@@ -26,11 +27,18 @@ const val EXTRA_CHALLENGE_ID = "app.frict.android.CHALLENGE_ID"
  * Wakes the app for a push: a visible notification for each, which FCM expects of a
  * high-priority message. The notification says only that something happened; the app
  * fetches what with signed requests once opened.
+ *
+ * With firebase_messaging_installation_id_enabled, FCM calls onRegistered, never onNewToken.
  */
+@SuppressLint("MissingFirebaseInstanceTokenRefresh")
 class FrictMessagingService : FirebaseMessagingService() {
     override fun onRegistered(installationId: String) = sendFid(applicationContext, installationId)
 
     override fun onMessageReceived(message: RemoteMessage) {
+        if (PrefsAccountStore(applicationContext).load() == null) {
+            Log.i(TAG, "ignored a push: not enrolled")
+            return
+        }
         when (val target = parsePush(message.data)) {
             is PushTarget.Challenge -> notify(target, LOGIN_CHANNEL, R.string.channel_logins, R.string.notify_login)
             is PushTarget.Alert -> notify(target, ALERT_CHANNEL, R.string.channel_alerts, R.string.alert_title)
