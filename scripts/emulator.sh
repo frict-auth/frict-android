@@ -77,7 +77,7 @@ fingerprint_enroll_attempt() {
     screen=$(ui_dump) || return 1
     if grep -qiF "isn't responding\"" <<<"$screen"; then
       dismiss_anr "$screen"
-    elif [[ -z $pin_entered ]] && grep -qiF 'text="Re-enter your PIN"' <<<"$screen"; then
+    elif [[ -z $pin_entered ]] && grep -qiE 'text="(Re-enter your PIN|Enter your device PIN)"' <<<"$screen"; then
       adb shell input text "$PIN"
       adb shell input keyevent KEYCODE_ENTER
       pin_entered=1
@@ -143,10 +143,11 @@ until [[ $(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r') == 1 ]
   sleep 2
 done
 echo "$ANDROID_SERIAL booted in $((SECONDS - start))s: API $(adb shell getprop ro.build.version.sdk | tr -d '\r')"
-gms=$(adb shell dumpsys package com.google.android.gms | grep -m1 -o 'versionCode=[0-9]*')
-adb shell dumpsys package com.google.android.gms | grep -m1 versionName
-((${gms#versionCode=} >= MIN_GMS_VERSION_CODE)) \
-  || { echo "Play services $gms is older than $MIN_GMS_VERSION_CODE" >&2; exit 1; }
+gms=$(adb shell dumpsys package com.google.android.gms)
+gms_code=$(sed -n 's/.*versionCode=\([0-9]*\).*/\1/p' <<<"$gms" | head -n1)
+echo "Play services $(sed -n 's/.*versionName=//p' <<<"$gms" | head -n1), versionCode $gms_code"
+((gms_code >= MIN_GMS_VERSION_CODE)) \
+  || { echo "Play services versionCode $gms_code is older than $MIN_GMS_VERSION_CODE" >&2; exit 1; }
 
 adb_root
 adb shell svc power stayon true

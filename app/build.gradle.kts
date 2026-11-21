@@ -59,6 +59,9 @@ dependencies {
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.junit)
+    // Compose UI tests bring espresso-core 3.5.0, which reflects on
+    // InputManager.getInstance, gone in Android 17.
+    androidTestImplementation(libs.androidx.espresso.core)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
