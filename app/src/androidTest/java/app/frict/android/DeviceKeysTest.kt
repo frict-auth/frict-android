@@ -34,18 +34,27 @@ class DeviceKeysTest {
         assertEquals(strongBox, spec.isStrongBoxBacked)
     }
 
-    @Test
-    fun approvalKeyNeedsAStrongBiometricOnEveryUse() {
+    private fun assertApprovalKeySpec(mode: UnlockMode, wantAuthTypes: Int) {
         for (strongBox in listOf(true, false)) {
-            val spec = approvalKeySpec(CHALLENGE, strongBox)
+            val spec = approvalKeySpec(CHALLENGE, strongBox, mode)
             assertEquals(APPROVAL_KEY_ALIAS, spec.keystoreAlias)
             assertP256Signing(spec, strongBox)
             assertTrue(spec.isUserAuthenticationRequired)
-            assertEquals(KeyProperties.AUTH_BIOMETRIC_STRONG, spec.userAuthenticationType)
+            assertEquals(wantAuthTypes, spec.userAuthenticationType)
             assertEquals(0, spec.userAuthenticationValidityDurationSeconds)
             assertTrue(spec.isInvalidatedByBiometricEnrollment)
         }
     }
+
+    @Test
+    fun fingerprintOrScreenLockApprovalKeyNeedsEitherOnEveryUse() = assertApprovalKeySpec(
+        UnlockMode.FINGERPRINT_OR_SCREEN_LOCK,
+        KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+    )
+
+    @Test
+    fun fingerprintOnlyApprovalKeyNeedsAStrongBiometricOnEveryUse() =
+        assertApprovalKeySpec(UnlockMode.FINGERPRINT_ONLY, KeyProperties.AUTH_BIOMETRIC_STRONG)
 
     @Test
     fun deviceKeyNeedsNoUser() {
@@ -57,14 +66,24 @@ class DeviceKeysTest {
         }
     }
 
+    private fun info(alias: String): KeyInfo {
+        val key = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as PrivateKey
+        return KeyFactory.getInstance(key.algorithm, "AndroidKeyStore").getKeySpec(key, KeyInfo::class.java)
+    }
+
+    @Test
+    fun fingerprintOrScreenLockKeyKeepsItsPolicy() {
+        KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
+        with(info(APPROVAL_KEY_ALIAS)) {
+            assertTrue(isUserAuthenticationRequired)
+            assertEquals(KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL, userAuthenticationType)
+            assertEquals(0, userAuthenticationValidityDurationSeconds)
+        }
+    }
+
     @Test
     fun generatedKeysAreAttestedAndKeepTheirPolicy() {
-        val keys = KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE)
-        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        fun info(alias: String): KeyInfo {
-            val key = store.getKey(alias, null) as PrivateKey
-            return KeyFactory.getInstance(key.algorithm, "AndroidKeyStore").getKeySpec(key, KeyInfo::class.java)
-        }
+        val keys = KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, UnlockMode.FINGERPRINT_ONLY)
         assertFalse(info(DEVICE_KEY_ALIAS).isUserAuthenticationRequired)
         with(info(APPROVAL_KEY_ALIAS)) {
             assertTrue(isUserAuthenticationRequired)
@@ -83,7 +102,7 @@ class DeviceKeysTest {
 
     @Test
     fun deviceSignerSignsWithTheDeviceKey() {
-        val keys = KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE)
+        val keys = KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
         val data = signedBytes("DUABCDEFGHIJKLMNOPQRSTUVWXYZ", 1762345678, ENROLL_PATH, "{}".toByteArray())
         val signature = keys.deviceSigner.sign(data)
         val publicKey = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(keys.deviceKey))
@@ -97,9 +116,20 @@ class DeviceKeysTest {
     }
 
     @Test
-    fun approvalKeySignsNothingWithoutTheBiometricPrompt() {
-        KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE)
-        val signer = approvalSignature().asSigner()
-        assertThrows(SignatureException::class.java) { signer.sign("frict-device-v1".toByteArray()) }
+    fun approvalKeySignsNothingWithoutThePrompt() {
+        for (mode in UnlockMode.entries) {
+            KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, mode)
+            val signer = approvalSignature().asSigner()
+            assertThrows(mode.name, SignatureException::class.java) { signer.sign("frict-device-v1".toByteArray()) }
+        }
+    }
+
+    @Test
+    fun deleteKeysRemovesBothKeys() {
+        KeystoreKeyMaker(hasStrongBox = false).create(CHALLENGE, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
+        deleteKeys()
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        assertFalse(store.containsAlias(DEVICE_KEY_ALIAS))
+        assertFalse(store.containsAlias(APPROVAL_KEY_ALIAS))
     }
 }

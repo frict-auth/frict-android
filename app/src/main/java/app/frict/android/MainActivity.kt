@@ -1,5 +1,6 @@
 package app.frict.android
 
+import android.app.KeyguardManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -18,13 +19,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -32,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -49,12 +56,14 @@ private val accountThread: ScheduledExecutorService = Executors.newSingleThreadS
 
 class MainActivity : ComponentActivity() {
     private var link by mutableStateOf("")
+    private var unlockMode by mutableStateOf(UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
     private var account by mutableStateOf<Account?>(null)
     private var status by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
     private var challenge by mutableStateOf<Challenge?>(null)
     private var pollError by mutableStateOf<String?>(null)
     private var alerts by mutableStateOf<List<Alert>>(emptyList())
+    private var confirmingRemove by mutableStateOf(false)
 
     /** [challenge]'s ID, for the account thread. */
     @Volatile
@@ -115,6 +124,10 @@ class MainActivity : ComponentActivity() {
             label = { Text(stringResource(R.string.activation_link)) },
             modifier = Modifier.fillMaxWidth(),
         )
+        Column(Modifier.selectableGroup().fillMaxWidth()) {
+            Text(stringResource(R.string.unlock_with_title), style = MaterialTheme.typography.titleMedium)
+            UnlockMode.entries.forEach { UnlockChoice(it) }
+        }
         Button(onClick = ::enroll, enabled = !busy && link.isNotBlank()) {
             Text(stringResource(R.string.enroll))
         }
@@ -122,12 +135,64 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun UnlockChoice(mode: UnlockMode) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .selectable(selected = unlockMode == mode, enabled = !busy, role = Role.RadioButton) { unlockMode = mode }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            RadioButton(selected = unlockMode == mode, onClick = null, enabled = !busy)
+            Column(Modifier.padding(start = 16.dp)) {
+                Text(stringResource(mode.label))
+                Text(stringResource(mode.explanation), style = MaterialTheme.typography.bodySmall)
+            }
+        }
+    }
+
+    @Composable
     private fun Enrolled(account: Account) {
         Text(stringResource(R.string.enrolled, account.userId, account.host))
+        Text(stringResource(R.string.unlocks_with, stringResource(account.unlockMode.label)))
         challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
         status?.let { Text(it) }
         pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
         alerts.forEach { AlertCard(it) }
+        OutlinedButton(onClick = { confirmingRemove = true }, enabled = !busy) { Text(stringResource(R.string.remove_phone)) }
+        if (confirmingRemove) RemoveDialog()
+    }
+
+    @Composable
+    private fun RemoveDialog() {
+        AlertDialog(
+            onDismissRequest = { confirmingRemove = false },
+            title = { Text(stringResource(R.string.remove_phone_title)) },
+            text = { Text(stringResource(R.string.remove_phone_explanation)) },
+            confirmButton = { TextButton(onClick = ::remove) { Text(stringResource(R.string.remove)) } },
+            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    private fun remove() {
+        confirmingRemove = false
+        busy = true
+        accountThread.execute {
+            val removed = unenroll(PrefsAccountStore(applicationContext), ::deleteKeys)
+            runOnUiThread {
+                busy = false
+                if (removed) {
+                    account = null
+                    show(null)
+                    alerts = emptyList()
+                    pollError = null
+                    link = ""
+                    status = getString(R.string.removed)
+                } else {
+                    status = getString(R.string.not_removed)
+                }
+            }
+        }
     }
 
     @Composable
@@ -224,8 +289,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Asks for a strong biometric bound to the approval_key, then sends [answer] signed with it. */
+    /** Asks for the account's unlock, bound to the approval_key, then sends [answer] signed with it. */
     private fun confirm(c: Challenge, answer: Answer) {
+        val mode = account?.unlockMode ?: return
         val signature = try {
             approvalSignature()
         } catch (e: Exception) {
@@ -239,12 +305,12 @@ class MainActivity : ComponentActivity() {
             Answer.DENY -> R.string.confirm_deny
             Answer.NOT_ME -> R.string.confirm_not_me
         }
-        BiometricPrompt.Builder(this)
+        val prompt = BiometricPrompt.Builder(this)
             .setTitle(getString(title))
             .setSubtitle(c.username)
-            .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-            .setNegativeButton(getString(R.string.back), mainExecutor) { _, _ -> busy = false }
-            .build()
+            .setAllowedAuthenticators(mode.promptAuthenticators)
+        if (mode.promptHasBackButton) prompt.setNegativeButton(getString(R.string.back), mainExecutor) { _, _ -> busy = false }
+        prompt.build()
             .authenticate(
                 BiometricPrompt.CryptoObject(signature),
                 CancellationSignal(),
@@ -254,7 +320,7 @@ class MainActivity : ComponentActivity() {
                         val authenticated = result.cryptoObject?.signature
                         if (authenticated == null) {
                             busy = false
-                            status = getString(R.string.approval_key_unavailable, "no signature in the biometric result")
+                            status = getString(R.string.approval_key_unavailable, "no signature in the prompt's result")
                             return
                         }
                         send(c, answer, authenticated.asSigner())
@@ -295,8 +361,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enroll() {
-        if (!hasStrongBiometric(this)) {
-            status = getString(R.string.needs_biometric)
+        val mode = unlockMode
+        enrollBlocker(mode, isDeviceSecure(this), hasStrongBiometric(this))?.let {
+            status = getString(it)
             return
         }
         busy = true
@@ -310,7 +377,7 @@ class MainActivity : ComponentActivity() {
             unixSeconds = { System.currentTimeMillis() / 1000 },
         )
         accountThread.execute {
-            val result = enroller.enroll(target)
+            val result = enroller.enroll(target, mode)
             runOnUiThread {
                 busy = false
                 when (result) {
@@ -332,7 +399,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** approval_key can only be created once a strong biometric is enrolled. */
+private val UnlockMode.label
+    get() = when (this) {
+        UnlockMode.FINGERPRINT_OR_SCREEN_LOCK -> R.string.unlock_fingerprint_or_screen_lock
+        UnlockMode.FINGERPRINT_ONLY -> R.string.unlock_fingerprint_only
+    }
+
+private val UnlockMode.explanation
+    get() = when (this) {
+        UnlockMode.FINGERPRINT_OR_SCREEN_LOCK -> R.string.unlock_fingerprint_or_screen_lock_explanation
+        UnlockMode.FINGERPRINT_ONLY -> R.string.unlock_fingerprint_only_explanation
+    }
+
+private fun isDeviceSecure(context: Context): Boolean = context.getSystemService(KeyguardManager::class.java).isDeviceSecure
+
 private fun hasStrongBiometric(context: Context): Boolean =
     context.getSystemService(BiometricManager::class.java)
         .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
