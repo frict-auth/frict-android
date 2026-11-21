@@ -19,10 +19,10 @@ unlock, approves a login by typing the PIN and removes the phone. Then a fingerp
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
 approves a login and denies one as "not me" with the fingerprint sensor. Both
 check that the server holds the app's Firebase Installation ID after
-enrollment and again after a restart. With `FCM_ACCESS_TOKEN` (CI mints one
-for the dev Firebase project, except on fork PRs), `fingerprint` also sends a
-login and an alert push through FCM and opens the app from their
-notifications. It runs frict-server at
+enrollment and again after a restart; `fingerprint` also hands the app a
+login and an alert push through firebase-messaging's receiver, as Play
+services delivers them, and opens the app from their notifications. It runs
+frict-server at
 a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
 how the emulator trusts that one.

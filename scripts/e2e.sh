@@ -17,17 +17,17 @@
 # 3. Remove: taps "Remove this phone", confirms, and requires the enrollment
 #    screen.
 # fingerprint only:
-# 3. Push (only with FCM_ACCESS_TOKEN, an OAuth token for the dev Firebase
-#    project): with the app in the background, starts a login and sends the
-#    push frict-server would, through FCM to the app's FID. Its notification
-#    must open the app on the challenge, fetched from the server, and Deny
-#    must reach /auth.
+# 3. Push: with the app in the background, starts a login and hands the app
+#    the push frict-server would send, through FCM's receiver as Play services
+#    delivers it, with made-up details beside the ID. Its notification must
+#    open the app on the challenge with the server's details, never the push's,
+#    and Deny must reach /auth.
 # 4. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
 #    pushes after the fraud report.
 # 5. Alert: the e2e user is its own alert recipient, so its poll must list the
-#    fraud report, with both Authentik links tappable. With FCM_ACCESS_TOKEN,
-#    the alert's push is sent first, and its notification opens the app.
+#    fraud report, with both Authentik links tappable. The alert's push comes
+#    first, and its notification opens the app.
 #
 # Needs docker and a booted, rootable emulator in ANDROID_SERIAL with screen
 # lock PIN; fingerprint also needs a strong biometric enrolled
@@ -137,7 +137,8 @@ store() { E2E_DB=$work/data/frict.db "$work/store" "$@"; }
 app_fid() {
   local i json fid
   for ((i = 0; i < 60; i++)); do
-    json=$(adb shell "cat /data/data/$PACKAGE/files/PersistedInstallation.*.json" 2>/dev/null) || json=
+    json=$(adb shell "cat /data/data/$PACKAGE/no_backup/PersistedInstallation.*.json" 2>/dev/null) || json=
+    # Status 3 is REGISTERED in PersistedInstallation.RegistrationStatus.
     if fid=$(python3 -I -c 'import json, sys
 p = json.loads(sys.argv[1])
 if p.get("Status") != 3: sys.exit(1)
@@ -147,7 +148,7 @@ print(p["Fid"])' "$json" 2>/dev/null); then
     fi
     sleep 1
   done
-  echo "no Firebase-registered FID for $PACKAGE within 60s" >&2
+  echo "no Firebase-registered FID for $PACKAGE within 60s; its PersistedInstallation: ${json:-none}" >&2
   return 1
 }
 
@@ -163,17 +164,14 @@ wait_server_fid() {
   return 1
 }
 
-# fcm_send DATA_JSON: sends what frict-server's push sender sends: a data
-# message to the app's FID at Android priority high.
-fcm_send() {
-  local project body
-  project=$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["project_info"]["project_id"])' \
-    "$ROOT/app/src/debug/google-services.json")
-  body=$(python3 -I -c 'import json, sys
-print(json.dumps({"message": {"fid": sys.argv[1], "data": json.loads(sys.argv[2]), "android": {"priority": "high"}}}))' \
-    "$fid" "$1")
-  curl -fsS -o /dev/null -X POST "https://fcm.googleapis.com/v1/projects/$project/messages:send" \
-    -H "Authorization: Bearer $FCM_ACCESS_TOKEN" -H "Content-Type: application/json" --data-binary "$body"
+# push KEY=VALUE...: delivers a data message to the app the way Play services
+# does, through firebase-messaging's receiver (root can send what only Play
+# services may).
+push() {
+  local args=() kv
+  for kv in "$@"; do args+=(--es "${kv%%=*}" "${kv#*=}"); done
+  adb shell am broadcast -n "$PACKAGE/com.google.firebase.iid.FirebaseInstanceIdReceiver" \
+    -a com.google.android.c2dm.intent.RECEIVE --es google.message_id "e2e-$RANDOM" "${args[@]}" >/dev/null
 }
 
 # notification_titles: titles of the app's notifications.
@@ -282,6 +280,10 @@ answer() {
   wait_for_text "User: android-e2e"
   wait_for_text "From: 203.0.113.7"
   wait_for_text "Application: Frict Android e2e"
+  if grep -qE 'mallory|198\.51\.100\.66' <<<"$(ui_dump)"; then
+    echo "the app shows details from the push, not the server" >&2
+    exit 1
+  fi
   tap_text "$1"
   wait_for_text "$2"
   unlock_prompt "$2"
@@ -309,23 +311,19 @@ if [[ $MODE == screen-lock ]]; then
   exit 0
 fi
 
-if [[ -n ${FCM_ACCESS_TOKEN:-} ]]; then
-  adb shell input keyevent KEYCODE_HOME
-  start_login
-  challenge_id=
-  for ((i = 0; i < 30; i++)); do
-    challenge_id=$(store challenge "$user_id" 2>/dev/null) && break
-    sleep 1
-  done
-  [[ -n $challenge_id ]] || { echo "no pending challenge for $user_id within 30s" >&2; exit 1; }
-  fcm_send "{\"challenge_id\": \"$challenge_id\"}"
-  echo "login push sent through FCM"
-  open_notification "Sign-in request"
-  answer Deny "Deny this sign-in" "deny deny:"
-  wait_for_text "Denied."
-else
-  echo "FCM_ACCESS_TOKEN is unset: no push through FCM in this run"
-fi
+adb shell input keyevent KEYCODE_HOME
+start_login
+challenge_id=
+for ((i = 0; i < 30; i++)); do
+  challenge_id=$(store challenge "$user_id" 2>/dev/null) && break
+  sleep 1
+done
+[[ -n $challenge_id ]] || { echo "no pending challenge for $user_id within 30s" >&2; exit 1; }
+push challenge_id="$challenge_id" username=mallory ipaddr=198.51.100.66
+echo "login push delivered"
+open_notification "Sign-in request"
+answer Deny "Deny this sign-in" "deny deny:"
+wait_for_text "Denied."
 
 login "Not me" "Report this sign-in as not you" "deny fraud:"
 wait_for_text "Denied and reported as not you."
@@ -334,12 +332,10 @@ echo "/auth after the fraud report: $paused"
 [[ $paused == "deny locked_out: Pushes paused"* ]] ||
   { echo "/auth after the fraud report: $paused, want deny locked_out: Pushes paused…" >&2; exit 1; }
 
-if [[ -n ${FCM_ACCESS_TOKEN:-} ]]; then
-  adb shell input keyevent KEYCODE_HOME
-  fcm_send "{\"alert_id\": \"$(store alert "$user_id")\"}"
-  echo "alert push sent through FCM"
-  open_notification "Sign-in reported as not theirs"
-fi
+adb shell input keyevent KEYCODE_HOME
+push alert_id="$(store alert "$user_id")"
+echo "alert push delivered"
+open_notification "Sign-in reported as not theirs"
 wait_for_text "Sign-in reported as not theirs" 30
 wait_for_text "Reported by android-e2e"
 scroll_down
