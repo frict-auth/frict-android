@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.google.services)
 }
 
+// Release signing and version come from the release workflow; see docs/release.md.
+fun env(name: String): String? = System.getenv(name)?.takeIf(String::isNotEmpty)
+
+val appVersionName = env("VERSION") ?: "0.0.1"
+val appVersionCode = appVersionName.split(".").map(String::toInt)
+    .let { (major, minor, patch) -> major * 1_000_000 + minor * 1_000 + patch }
+
 android {
     namespace = "app.frict.android"
     compileSdk {
@@ -14,8 +21,8 @@ android {
         applicationId = "app.frict.android"
         minSdk = 35
         targetSdk = 37
-        versionCode = 1
-        versionName = "0.0.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -27,12 +34,24 @@ android {
             keyAlias = "androiddebugkey"
             keyPassword = "android"
         }
+        create("release") {
+            storeFile = env("KEYSTORE_FILE")?.let(::file)
+            storePassword = env("KEYSTORE_PASSWORD")
+            keyAlias = env("KEY_ALIAS")
+            keyPassword = env("KEY_PASSWORD")
+        }
     }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".dev"
             signingConfig = signingConfigs.getByName("debug")
+        }
+        release {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
 
@@ -71,12 +90,6 @@ dependencies {
     // InputManager.getInstance, gone in Android 17.
     androidTestImplementation(libs.androidx.espresso.core)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
-}
-
-// Only the debug build has a google-services.json (the dev Firebase project) until the
-// release project exists; a release build without one runs poll-only.
-googleServices {
-    missingGoogleServicesStrategy = com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy.WARN
 }
 
 // gradle.lockfile pins what ships and what the tests run; the CI vulnerability
