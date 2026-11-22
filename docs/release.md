@@ -73,28 +73,12 @@ gh secret list --env release -R $R
 history. The last policy listing must print only `main`. A second POST for
 `main` answers 303 with the existing policy.
 
-### 3. Release Firebase config
+### 3. Play Console app
 
-The prod Firebase project's Android app `app.frict.android` gives
-`app/src/release/google-services.json`; commit it (`git add -f`) in a
-`feat:`/`fix:` PR, whose merge makes the first release. Its `play` job fails:
-the app doesn't exist in Play yet.
+Create app "Frict": package name `app.frict.android`, App, Free. The app and
+step 4's invite must exist before the first release.
 
-### 4. Play Console: app, first upload, Play App Signing
-
-1. Create app "Frict": App, Free.
-2. Download the first release's AAB:
-   `gh run download <run-id> -R frict-auth/frict-android -n release-aab`
-3. Testing → Internal testing → Create new release. Accept Play App Signing
-   with a Google-generated app signing key, upload
-   `bundle/release/app-release.aab` and roll it out. Add yourself as a tester.
-4. Don't re-run that `play` job: Play refuses a versionCode it already has.
-   The next release uploads by itself.
-
-Setup → App integrity then shows the app signing key and upload key
-certificates; the upload key's must match step 1's.
-
-### 5. Release service account
+### 4. Release service account
 
 In the prod project. The provider admits only frict-android's
 `repository_id`; the binding admits only jobs in the `release` environment,
@@ -135,11 +119,27 @@ The `play` job fails before authenticating while either variable is empty.
 Play Console → Users and permissions → Invite new users: `$SA`, app
 permissions for Frict only, "Release apps to testing tracks".
 
+### 5. Release Firebase config and first release
+
+The prod Firebase project's Android app `app.frict.android` gives
+`app/src/release/google-services.json`; commit it (`git add -f`) in a
+`feat:`/`fix:` PR. Its merge makes the first release, which the `play` job
+uploads; there is no manual upload.
+
+Before anyone installs it, check the App signing page: the upload key
+certificate must match step 1's, and the app signing key must differ from it.
+
+Testers: Testing → Internal testing → Testers. "Copy link" stays disabled
+until the app is published. Until then, install the "Signed, universal APK"
+(Test and release → Latest releases and app bundles → All app versions → the
+version → Downloads), which Google signs with the Play app signing key.
+
 ### 6. At M3: release API key
 
 In the prod project, restrict the release Android API key to
-`app.frict.android` signed by the Play app signing key (Play Console → App
-integrity) or the upload key (step 1), and to the APIs FCM needs:
+`app.frict.android` signed by the Play app signing key or the upload key (step
+1), and to the APIs FCM needs. Repeat the app signing line for each app signing
+certificate the App signing page shows; Google gives new apps more than one:
 
 ```
 gcloud services api-keys update <key-id> --project=<prod-project-id> \
