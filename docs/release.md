@@ -5,7 +5,8 @@
 1. `version`: semantic-release reads the commits since the last `v*` tag. A
    `feat:` makes a minor release, a `fix:` or `perf:` a patch, a
    `BREAKING CHANGE:` footer a major one. It tags `vX.Y.Z` and creates the
-   GitHub release. Otherwise nothing more runs.
+   GitHub release. Otherwise nothing more runs. The baseline tag `v0.0.0` makes
+   the first `feat:` release 0.1.0.
 2. `bundle` (environment `release`): builds `bundleRelease` with
    `VERSION=X.Y.Z` (versionName `X.Y.Z`, versionCode `X*1000000 + Y*1000 + Z`),
    signs it with the upload key and runs `scripts/check-release-signing.sh`,
@@ -50,6 +51,8 @@ keytool -list -v -keystore frict-upload.jks -alias upload | grep -E 'SHA1|SHA256
 ### 2. `release` environment and its secrets
 
 ```
+(
+export GH_PAGER=cat
 R=frict-auth/frict-android
 gh api -X PUT repos/$R/environments/release \
   -F 'deployment_branch_policy[protected_branches]=false' \
@@ -63,6 +66,7 @@ gh secret set KEYSTORE_PASSWORD --env release -R $R
 gh secret set KEY_PASSWORD --env release -R $R
 gh secret set KEY_ALIAS --env release -R $R --body upload
 gh secret list --env release -R $R
+)
 ```
 
 `gh secret set` without `--body` prompts, so passwords stay out of shell
