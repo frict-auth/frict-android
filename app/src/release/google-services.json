@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "25498701026",
+    "project_id": "frict-auth",
+    "storage_bucket": "frict-auth.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:25498701026:android:549d68baf2f9ea0537e2bb",
+        "android_client_info": {
+          "package_name": "app.frict.android"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCfvvX64Rr4JRvkrxyXEyKh3IOyapLR890"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
