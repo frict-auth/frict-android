@@ -9,6 +9,7 @@ const val PENDING_PATH = "/device/v1/pending"
 const val CHALLENGE_PATH = "/device/v1/challenge"
 const val ANSWER_PATH = "/device/v1/answer"
 const val FID_PATH = "/device/v1/fid"
+const val REMOVE_PATH = "/device/v1/remove"
 
 /** Until the server sets one; also the wait after a failed poll. */
 const val DEFAULT_POLL_SECONDS = 5L
@@ -43,8 +44,7 @@ sealed interface PollUpdate {
     data class Failed(val message: String) : PollUpdate
 }
 
-/** [alerts] is null when the poll failed. */
-data class Poll(val update: PollUpdate, val nextSeconds: Long, val alerts: List<Alert>?)
+data class Poll(val update: PollUpdate, val nextSeconds: Long)
 
 sealed interface AnswerResult {
     data class Answered(val answer: Answer) : AnswerResult
@@ -58,6 +58,16 @@ sealed interface AnswerResult {
     data class NetworkError(val message: String) : AnswerResult
 }
 
+sealed interface ServerRemoval {
+    data object Removed : ServerRemoval
+
+    /** 401: the server holds no enrollment this key signs for, or the clock is off. */
+    data object AlreadyGone : ServerRemoval
+
+    /** The server could not be reached, failed, or refused the request; it may still hold the enrollment. */
+    data class NotTold(val reason: String) : ServerRemoval
+}
+
 sealed interface FidResult {
     data object Sent : FidResult
     data class Rejected(val status: Int, val error: String) : FidResult
@@ -65,7 +75,7 @@ sealed interface FidResult {
 }
 
 /**
- * The enrolled device's requests: polls, fetches and FID updates with the device_key;
+ * The enrolled device's requests: polls, fetches, FID updates and removal with the device_key;
  * answers only with a signer the caller got from a biometric prompt over the
  * approval_key. Calls block.
  */
@@ -79,14 +89,14 @@ class Approvals(
     fun poll(shownId: String?): Poll {
         val response = post(PENDING_PATH, JSONObject(), deviceSigner)
         val pending = (response as? DeviceResponse.Ok)?.takeIf { it.status == HttpURLConnection.HTTP_OK }?.let(::parsePending)
-            ?: return Poll(PollUpdate.Failed(describe(response)), DEFAULT_POLL_SECONDS, null)
-        val (ids, next, alerts) = pending
+            ?: return Poll(PollUpdate.Failed(describe(response)), DEFAULT_POLL_SECONDS)
+        val (ids, next) = pending
         val update = when {
             shownId != null -> if (shownId in ids) PollUpdate.NoChange else PollUpdate.Withdrawn(shownId)
             ids.isEmpty() -> PollUpdate.NoChange
             else -> fetch(ids.first())
         }
-        return Poll(update, next, alerts)
+        return Poll(update, next)
     }
 
     /** Challenge [id], as a push names it: its details come from the server, never the push. */
@@ -97,6 +107,20 @@ class Approvals(
         is DeviceResponse.NetworkError -> FidResult.NetworkError(response.message)
         is DeviceResponse.Ok ->
             if (response.status == HttpURLConnection.HTTP_OK) FidResult.Sent else FidResult.Rejected(response.status, errorCode(response.body))
+    }
+
+    /** Asks the server to delete this enrollment. */
+    fun remove(): ServerRemoval {
+        val response = try {
+            post(REMOVE_PATH, JSONObject(), deviceSigner)
+        } catch (e: Exception) {
+            return ServerRemoval.NotTold(e.message ?: e.javaClass.simpleName)
+        }
+        return when {
+            response is DeviceResponse.Ok && response.status == HttpURLConnection.HTTP_OK -> ServerRemoval.Removed
+            response is DeviceResponse.Ok && response.status == HttpURLConnection.HTTP_UNAUTHORIZED -> ServerRemoval.AlreadyGone
+            else -> ServerRemoval.NotTold(describe(response))
+        }
     }
 
     private fun fetch(id: String): PollUpdate {
@@ -127,10 +151,10 @@ class Approvals(
     }
 }
 
-private fun parsePending(r: DeviceResponse.Ok): Triple<List<String>, Long, List<Alert>>? = try {
+private fun parsePending(r: DeviceResponse.Ok): Pair<List<String>, Long>? = try {
     val json = JSONObject(r.body)
     val ids = json.getJSONArray("challenge_ids").let { a -> List(a.length()) { a.getString(it) } }
-    Triple(ids, json.optLong("poll_interval", DEFAULT_POLL_SECONDS).coerceIn(1, 60), parseAlerts(json.optJSONArray("alerts")))
+    ids to json.optLong("poll_interval", DEFAULT_POLL_SECONDS).coerceIn(1, 60)
 } catch (_: JSONException) {
     null
 }

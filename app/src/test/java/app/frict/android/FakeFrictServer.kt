@@ -21,14 +21,17 @@ enum class ChallengeState { PENDING, APPROVED, DENIED_CANCEL, DENIED_NOT_ME, EXP
  * Stands in for frict-server's device API (docs/device-protocol.md): enroll accepts one
  * activation [code] for [userId], signed by the body's device_key; pending and challenge
  * want the enrolled device_key, answer the enrolled approval_key. Challenges are added
- * with [addChallenge] and their state is in [challenges]; pending lists [alerts]. fid,
- * signed with the device_key, sets [fid].
+ * with [addChallenge] and their state is in [challenges]. fid, signed with the device_key,
+ * sets [fid]; remove, signed with the device_key, forgets both keys. [failWith] answers
+ * every request with that status instead.
  */
 class FakeFrictServer(private val userId: String, private val code: String) : AutoCloseable {
     val requests = CopyOnWriteArrayList<RecordedRequest>()
     val challenges = linkedMapOf<String, ChallengeState>()
     var pollInterval = 5
-    val alerts = JSONArray()
+
+    @Volatile
+    var failWith: Int? = null
 
     @Volatile
     var fid: String? = null
@@ -77,30 +80,14 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
     }
 
     @Synchronized
-    fun addAlert(id: String, username: String = "geoffrey", url: String = "https://auth.example/if/admin/#/identity/users;%7B%22ak-user-list-search%22:%22$username%22%7D") {
-        alerts.put(
-            JSONObject()
-                .put("alert_id", id)
-                .put("username", username)
-                .put("ipaddr", "203.0.113.7")
-                .put("pushinfo", "Domain=auth.example&Application=Frict+test")
-                .put("type", "authentik Login request")
-                .put("attempted", 1762345678)
-                .put("reported", 1762345690)
-                .put("reset_password_url", url)
-                .put("revoke_sessions_url", url),
-        )
-    }
-
-    @Synchronized
-    private fun handle(r: RecordedRequest): Pair<Int, String> = when (r.path) {
+    private fun handle(r: RecordedRequest): Pair<Int, String> = failWith?.let { it to """{"error":"internal"}""" } ?: when (r.path) {
         ENROLL_PATH -> if (acceptsEnroll(r)) 200 to "{}" else unauthorized
         PENDING_PATH -> when {
             !verifies(r, deviceKey) -> unauthorized
             r.json.length() != 0 -> badRequest
             else -> {
                 val ids = challenges.filterValues { it == ChallengeState.PENDING }.keys
-                200 to JSONObject().put("challenge_ids", JSONArray(ids)).put("poll_interval", pollInterval).put("alerts", alerts).toString()
+                200 to JSONObject().put("challenge_ids", JSONArray(ids)).put("poll_interval", pollInterval).toString()
             }
         }
         CHALLENGE_PATH -> when {
@@ -115,6 +102,15 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
             r.json.fields() != setOf("fid") || r.json.optString("fid").isEmpty() -> badRequest
             else -> {
                 fid = r.json.getString("fid")
+                200 to "{}"
+            }
+        }
+        REMOVE_PATH -> when {
+            !verifies(r, deviceKey) -> unauthorized
+            r.json.length() != 0 -> badRequest
+            else -> {
+                deviceKey = null
+                approvalKey = null
                 200 to "{}"
             }
         }

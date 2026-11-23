@@ -75,15 +75,32 @@ interface AccountStore {
 }
 
 /**
- * Removes this phone's enrollment: the saved account, then both keys. The server keeps
- * its device record until an admin deletes it. Returns false, keeping the keys, if the
- * account could not be removed.
+ * Removes this phone's enrollment from this phone only: the saved account, then both keys.
+ * Returns false, keeping the keys, if the account could not be removed.
  */
 fun unenroll(store: AccountStore, deleteKeys: () -> Unit): Boolean {
     if (!store.clear()) return false
     deleteKeys()
     return true
 }
+
+sealed interface RemoveResult {
+    data object Removed : RemoveResult
+
+    /** Gone from the server, but the account could not be removed here; the keys are kept. */
+    data object NotRemovedHere : RemoveResult
+
+    /** Nothing was removed: the user decides whether to [unenroll] anyway. */
+    data class ServerNotTold(val reason: String) : RemoveResult
+}
+
+/** Removes the enrollment from the server, then, once the server no longer holds it, from this phone. */
+fun removePhone(tellServer: () -> ServerRemoval, store: AccountStore, deleteKeys: () -> Unit): RemoveResult =
+    when (val told = tellServer()) {
+        is ServerRemoval.NotTold -> RemoveResult.ServerNotTold(told.reason)
+        ServerRemoval.Removed, ServerRemoval.AlreadyGone ->
+            if (unenroll(store, deleteKeys)) RemoveResult.Removed else RemoveResult.NotRemovedHere
+    }
 
 sealed interface EnrollResult {
     data class Enrolled(val account: Account) : EnrollResult
