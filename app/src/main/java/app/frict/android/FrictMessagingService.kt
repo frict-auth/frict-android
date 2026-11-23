@@ -64,6 +64,13 @@ class FrictMessagingService : FirebaseMessagingService() {
     }
 }
 
+/** The "Sign-ins reported as not theirs" channel of app versions with alerts. */
+const val RETIRED_ALERT_CHANNEL = "alerts"
+
+/** Deletes notification channels no version of the app posts to any more. */
+fun deleteRetiredChannels(context: Context) =
+    context.getSystemService(NotificationManager::class.java).deleteNotificationChannel(RETIRED_ALERT_CHANNEL)
+
 /** A build without a Firebase project (release, until it has one) runs poll-only. */
 private fun hasFirebase(context: Context) = FirebaseApp.getApps(context).isNotEmpty()
 

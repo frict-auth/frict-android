@@ -82,6 +82,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread { enrolled(saved) }
         }
         startPush(applicationContext)
+        deleteRetiredChannels(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
