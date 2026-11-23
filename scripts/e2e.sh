@@ -19,8 +19,10 @@
 #    types PIN; fingerprint: touches the sensor), and requires /auth to return
 #    allow.
 # screen-lock only:
-# 3. Remove: taps "Remove this phone", confirms, and requires the enrollment
-#    screen.
+# 3. Remove: with the server unreachable, "Remove this phone" must say the
+#    server could not be told and offer "Remove anyway"; Cancel keeps the
+#    enrollment. With the server back, removal must return to the enrollment
+#    screen, and /auth for the user must then get 400, code 40002.
 # fingerprint only:
 # 3. Push: with the app in the background, starts a login and hands the app
 #    the push frict-server would send, through FCM's receiver as Play services
@@ -29,10 +31,9 @@
 #    and Deny must reach /auth.
 # 4. Not me: the same, denied with "Not me": /auth must return deny with status
 #    fraud, and the next /auth must be refused because the server paused
-#    pushes after the fraud report.
-# 5. Alert: the e2e user is its own alert recipient, so its poll must list the
-#    fraud report, with both Authentik links tappable. The alert's push comes
-#    first, and its notification opens the app.
+#    pushes after the fraud report (FRICT_NOT_ME_COUNT=1).
+# 5. Remove anyway: with the server unreachable, "Remove anyway" must return
+#    to the enrollment screen while the server still holds the device.
 #
 # Needs docker and a booted, rootable emulator in ANDROID_SERIAL with screen
 # lock PIN; fingerprint also needs a strong biometric enrolled
@@ -50,7 +51,7 @@ case $MODE in
   fingerprint) MODE_LABEL="Fingerprint only" ;;
   *) echo "unknown mode $MODE; want screen-lock or fingerprint" >&2; exit 2 ;;
 esac
-FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-7b80fe736a33fa9f80f7af241a62d0a884df0dd0}
+FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-3c5f6894154702cf34dcb98c847105bd06fc03a4}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 : "${ANDROID_SERIAL:?set ANDROID_SERIAL to the booted emulator}"
 API_HOST=10.0.2.2
@@ -83,10 +84,10 @@ git -C "$src" checkout -q FETCH_HEAD
 mkdir "$src/cmd/duo" "$src/cmd/store"
 cp "$ROOT/scripts/duo/main.go" "$src/cmd/duo/"
 cp "$ROOT/scripts/store/main.go" "$src/cmd/store/"
-docker build -q -t "$NAME" -f "$src/e2e/frict-server.Dockerfile" "$src" >/dev/null
+docker build -q -t "$NAME" "$src" >/dev/null
 docker run --rm -v "$src":/src -v "$work":/out -w /src -u "$(id -u):$(id -g)" \
   -e HOME=/tmp -e GOCACHE=/tmp/gocache -e CGO_ENABLED=0 \
-  golang:1.27.3 sh -c 'go build -o /out/duo ./cmd/duo && go build -o /out/store ./cmd/store'
+  docker.io/library/golang:1.27.4@sha256:5e8afd493a7124a8586e134d9b532731161d4b9becf9dee5a5956b107426f93d sh -c 'go build -o /out/duo ./cmd/duo && go build -o /out/store ./cmd/store'
 
 secrets=$work/secrets
 mkdir "$secrets"
@@ -119,16 +120,21 @@ docker run -d --name "$NAME-server" --network "$NAME" --network-alias frict-serv
   -u "$(id -u):$(id -g)" -v "$work/data":/data -v "$secrets":/secrets:ro \
   -e FRICT_API_HOSTNAME=$API_HOST -e FRICT_CLIENT_ID=$CLIENT_ID \
   -e FRICT_CLIENT_SECRET_FILE=/secrets/duo-client-secret -e FRICT_DB_PATH=/data/frict.db \
-  -e FRICT_AUTHENTIK_URL=http://127.0.0.1:9000 -e FRICT_ALERT_RECIPIENTS=android-e2e "$NAME" >/dev/null
+  -e FRICT_NOT_ME_COUNT=1 "$NAME" >/dev/null
 docker run -d --name "$NAME-tls" --network "$NAME" -p 127.0.0.1:443:443 \
   -v "$secrets":/secrets:ro -v "$work/tls.conf":/etc/nginx/conf.d/default.conf:ro \
   docker.io/library/nginx:1.29.3-alpine@sha256:b3c656d55d7ad751196f21b7fd2e8d4da9cb430e32f646adcf92441b72f82b14 >/dev/null
-for ((i = 0; i < 30; i++)); do
-  curl -fsS --cacert "$secrets/ca.pem" --connect-to "::127.0.0.1:443" "https://$API_HOST/healthz" >/dev/null 2>&1 && break
-  sleep 1
-done
-curl -fsS --cacert "$secrets/ca.pem" --connect-to "::127.0.0.1:443" "https://$API_HOST/healthz"
-echo
+
+wait_healthy() {
+  local i
+  for ((i = 0; i < 30; i++)); do
+    curl -fsS --cacert "$secrets/ca.pem" --connect-to "::127.0.0.1:443" "https://$API_HOST/healthz" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  curl -fsS --cacert "$secrets/ca.pem" --connect-to "::127.0.0.1:443" "https://$API_HOST/healthz"
+  echo
+}
+wait_healthy
 
 duo() {
   E2E_HOST=$API_HOST E2E_ADDR=127.0.0.1:443 E2E_CA=$secrets/ca.pem E2E_IKEY=$CLIENT_ID \
@@ -299,7 +305,7 @@ done
 echo "enroll_status after the app enrolled: $after"
 [[ $after == success ]] || { echo "enroll_status after the app enrolled: $after, want success" >&2; exit 1; }
 wait_for_text "Enrolled as $user_id with $API_HOST"
-wait_for_text "Approve sign-ins with: $MODE_LABEL. To change, enroll again."
+wait_for_text "Approve sign-ins with: $MODE_LABEL. To change, remove this phone, then enroll again."
 
 # unlock_prompt TITLE: answers the prompt titled TITLE the way MODE allows.
 unlock_prompt() {
@@ -358,13 +364,42 @@ login() {
 login Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
 
-if [[ $MODE == screen-lock ]]; then
+# start_removal: confirms "Remove this phone".
+start_removal() {
+  scroll_down
   tap_text "Remove this phone"
   wait_for_text "Remove this phone?"
   tap_text Remove
-  wait_for_text "This phone was removed. Ask an admin to delete it in Authentik."
+}
+
+# server_unreachable: stops the TLS front, so the app's requests are refused.
+server_unreachable() {
+  docker stop "$NAME-tls" >/dev/null
+  echo "server unreachable"
+}
+
+if [[ $MODE == screen-lock ]]; then
+  server_unreachable
+  start_removal
+  wait_for_text "The server could not be told"
+  wait_for_text "Remove anyway"
+  tap_text Cancel
+  wait_for_text "Enrolled as $user_id with $API_HOST"
+  echo "unreachable server: the app offers Remove anyway; Cancel keeps the enrollment"
+  docker start "$NAME-tls" >/dev/null
+  wait_healthy
+  start_removal
+  wait_for_text "This phone was removed."
   wait_for_text "Not enrolled"
   echo "removed; back on the enrollment screen"
+  if gone=$(duo auth "$user_id" android-e2e 2>&1); then
+    echo "/auth after removal: $gone, want HTTP 400 code 40002" >&2
+    exit 1
+  fi
+  echo "/auth after removal: $gone"
+  [[ $gone == *"HTTP 400 "*'"code":40002'*'"Invalid request parameters: user_id"'* ]] ||
+    { echo "/auth after removal: $gone, want HTTP 400 code 40002 for user_id" >&2; exit 1; }
+  echo "the server no longer knows the removed device"
   exit 0
 fi
 
@@ -389,16 +424,11 @@ echo "/auth after the fraud report: $paused"
 [[ $paused == "deny locked_out: Pushes paused"* ]] ||
   { echo "/auth after the fraud report: $paused, want deny locked_out: Pushes paused…" >&2; exit 1; }
 
-adb shell input keyevent KEYCODE_HOME
-push alert_id="$(store alert "$user_id")"
-echo "alert push delivered"
-open_notification "Sign-in reported as not theirs"
-wait_for_text "Sign-in reported as not theirs" 30
-wait_for_text "Reported by android-e2e"
-scroll_down
-for link in "Reset password" "Revoke sessions"; do
-  wait_for_text "$link"
-  node=$(grep -m1 -iF "text=\"$link\"" <<<"$(ui_dump)")
-  [[ $node == *'clickable="true"'* ]] || { echo "\"$link\" is on screen but not tappable: $node" >&2; exit 1; }
-done
-echo "alert shown with tappable links"
+server_unreachable
+start_removal
+wait_for_text "The server could not be told"
+tap_text "Remove anyway"
+wait_for_text "This phone was removed."
+wait_for_text "Not enrolled"
+[[ -n $(store fid "$user_id") ]] || { echo "the server lost the device after a local-only removal" >&2; exit 1; }
+echo "removed anyway; the server still holds the device"

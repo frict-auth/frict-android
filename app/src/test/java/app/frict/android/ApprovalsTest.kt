@@ -5,7 +5,6 @@ import java.security.KeyPairGenerator
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
-import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,13 +27,16 @@ private fun signerOf(keys: KeyPair) = Signer { data ->
     }
 }
 
+private fun verifies(key: PublicKey, signed: ByteArray, signature: ByteArray): Boolean =
+    Signature.getInstance("SHA256withECDSA").run {
+        initVerify(key)
+        update(signed)
+        verify(signature)
+    }
+
 private fun RecordedRequest.verifiesWith(key: PublicKey): Boolean {
     val (user, unix, sig) = authorization.removePrefix("Frict-P256 ").split(':')
-    return Signature.getInstance("SHA256withECDSA").run {
-        initVerify(key)
-        update(signedBytes(user, unix.toLong(), path, body))
-        verify(b64url(sig))
-    }
+    return verifies(key, signedBytes(user, unix.toLong(), path, body), b64url(sig))
 }
 
 class ApprovalsTest {
@@ -64,7 +66,7 @@ class ApprovalsTest {
             created = 1762345678,
             expires = 1762345738,
         )
-        assertEquals(Poll(PollUpdate.Show(expected), 7, emptyList()), approvals.poll(shownId = null))
+        assertEquals(Poll(PollUpdate.Show(expected), 7), approvals.poll(shownId = null))
         assertEquals(listOf(PENDING_PATH, CHALLENGE_PATH), server.requests.map { it.path })
         assertEquals(FIRST, server.requests[1].json.getString("challenge_id"))
     }
@@ -83,7 +85,7 @@ class ApprovalsTest {
 
     @Test
     fun nothingPendingIsNoChange() {
-        assertEquals(Poll(PollUpdate.NoChange, 5, emptyList()), approvals.poll(shownId = null))
+        assertEquals(Poll(PollUpdate.NoChange, 5), approvals.poll(shownId = null))
     }
 
     @Test
@@ -103,55 +105,13 @@ class ApprovalsTest {
     @Test
     fun failedPollSaysWhyAndWaitsTheDefault() {
         server.enrolled(p256().public, approval.public)
-        server.addAlert(FIRST)
-        assertEquals(Poll(PollUpdate.Failed("HTTP 401 unauthorized"), DEFAULT_POLL_SECONDS, null), approvals.poll(shownId = null))
+        assertEquals(Poll(PollUpdate.Failed("HTTP 401 unauthorized"), DEFAULT_POLL_SECONDS), approvals.poll(shownId = null))
     }
 
     @Test
     fun unreachableServerFailsThePoll() {
         server.close()
         assertTrue(approvals.poll(shownId = null).update is PollUpdate.Failed)
-    }
-
-    @Test
-    fun pollListsAlertsOldestFirstFromTheDeviceKeySignedPending() {
-        server.addAlert(FIRST, username = "geoffrey")
-        server.addAlert(SECOND, username = "someone")
-        val url = "https://auth.example/if/admin/#/identity/users;%7B%22ak-user-list-search%22:%22geoffrey%22%7D"
-        val expected = Alert(
-            id = FIRST,
-            username = "geoffrey",
-            ipaddr = "203.0.113.7",
-            pushinfo = listOf("Domain" to "auth.example", "Application" to "Frict test"),
-            type = "authentik Login request",
-            attempted = 1762345678,
-            reported = 1762345690,
-            resetPasswordUrl = url,
-            revokeSessionsUrl = url,
-        )
-        val alerts = approvals.poll(shownId = null).alerts
-        assertEquals(listOf(FIRST, SECOND), alerts?.map { it.id })
-        assertEquals(expected, alerts?.first())
-        val r = server.requests.single()
-        assertEquals(PENDING_PATH, r.path)
-        assertTrue(r.verifiesWith(device.public))
-        assertFalse(r.verifiesWith(approval.public))
-    }
-
-    @Test
-    fun alertsComeWithChallengesInTheSamePoll() {
-        server.addChallenge(FIRST)
-        server.addAlert(SECOND)
-        val poll = approvals.poll(shownId = FIRST)
-        assertEquals(PollUpdate.NoChange, poll.update)
-        assertEquals(listOf(SECOND), poll.alerts?.map { it.id })
-    }
-
-    @Test
-    fun alertsWithoutAnIdAreSkipped() {
-        server.addAlert(FIRST)
-        server.alerts.put(JSONObject().put("username", "nobody")).put("not an object")
-        assertEquals(listOf(FIRST), approvals.poll(shownId = null).alerts?.map { it.id })
     }
 
     @Test
@@ -250,5 +210,43 @@ class ApprovalsTest {
     fun openingAChallengeNoLongerPendingShowsNothing() {
         server.addChallenge(FIRST, state = ChallengeState.APPROVED)
         assertEquals(PollUpdate.NoChange, approvals.open(FIRST))
+    }
+
+    @Test
+    fun removeSendsAnEmptyObjectSignedWithTheDeviceKey() {
+        assertEquals(ServerRemoval.Removed, approvals.remove())
+        val r = server.requests.single()
+        assertEquals(REMOVE_PATH, r.path)
+        assertEquals("{}", String(r.body, Charsets.UTF_8))
+        assertTrue(r.authorization, r.authorization.startsWith("Frict-P256 $USER_ID:$NOW:"))
+        val signed = "frict-device-v1\n$USER_ID\n$NOW\n/device/v1/remove\n{}".toByteArray(Charsets.UTF_8)
+        val signature = b64url(r.authorization.substringAfterLast(':'))
+        assertTrue(verifies(device.public, signed, signature))
+        assertFalse(verifies(approval.public, signed, signature))
+    }
+
+    @Test
+    fun removingAnEnrollmentTheServerNoLongerHoldsIsAlreadyGone() {
+        assertEquals(ServerRemoval.Removed, approvals.remove())
+        assertEquals(ServerRemoval.AlreadyGone, approvals.remove())
+    }
+
+    @Test
+    fun removalTheServerFailsIsNotTold() {
+        server.failWith = 503
+        assertEquals(ServerRemoval.NotTold("HTTP 503 internal"), approvals.remove())
+    }
+
+    @Test
+    fun removalThatCannotReachTheServerIsNotTold() {
+        server.close()
+        assertTrue(approvals.remove() is ServerRemoval.NotTold)
+    }
+
+    @Test
+    fun removalThatCannotSignIsNotTold() {
+        val noKey = Approvals(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY), DeviceApi(server.url), { error("no device_key") }, { NOW })
+        assertEquals(ServerRemoval.NotTold("no device_key"), noKey.remove())
+        assertEquals(emptyList<RecordedRequest>(), server.requests.toList())
     }
 }

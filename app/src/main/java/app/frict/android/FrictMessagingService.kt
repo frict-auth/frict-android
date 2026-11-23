@@ -18,13 +18,12 @@ import java.util.concurrent.TimeUnit
 
 private const val TAG = "FrictPush"
 private const val LOGIN_CHANNEL = "logins"
-private const val ALERT_CHANNEL = "alerts"
 private const val FID_TIMEOUT_SECONDS = 30L
 
 const val EXTRA_CHALLENGE_ID = "app.frict.android.CHALLENGE_ID"
 
 /**
- * Wakes the app for a push: a visible notification for each, which FCM expects of a
+ * Wakes the app for a login push: a visible notification for each, which FCM expects of a
  * high-priority message. The notification says only that something happened; the app
  * fetches what with signed requests once opened.
  *
@@ -39,27 +38,29 @@ class FrictMessagingService : FirebaseMessagingService() {
             Log.i(TAG, "ignored a push: not enrolled")
             return
         }
-        when (val target = parsePush(message.data)) {
-            is PushTarget.Challenge -> notify(target, LOGIN_CHANNEL, R.string.channel_logins, R.string.notify_login)
-            is PushTarget.Alert -> notify(target, ALERT_CHANNEL, R.string.channel_alerts, R.string.alert_title)
-            null -> Log.w(TAG, "ignored a push with data keys ${message.data.keys}")
+        val id = parsePush(message.data)
+        if (id == null) {
+            Log.w(TAG, "ignored a push with data keys ${message.data.keys}")
+            return
         }
+        notify(id)
     }
 
-    private fun notify(target: PushTarget, channelId: String, channelName: Int, title: Int) {
+    private fun notify(challengeId: String) {
         val notifications = getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel(channelId, getString(channelName), NotificationManager.IMPORTANCE_HIGH))
-        val open = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        if (target is PushTarget.Challenge) open.putExtra(EXTRA_CHALLENGE_ID, target.id)
-        val notification = Notification.Builder(this, channelId)
+        notifications.createNotificationChannel(NotificationChannel(LOGIN_CHANNEL, getString(R.string.channel_logins), NotificationManager.IMPORTANCE_HIGH))
+        val open = Intent(this, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(EXTRA_CHALLENGE_ID, challengeId)
+        val notification = Notification.Builder(this, LOGIN_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(title))
+            .setContentTitle(getString(R.string.notify_login))
             .setContentText(getString(R.string.notify_open))
             .setCategory(Notification.CATEGORY_STATUS)
             .setAutoCancel(true)
-            .setContentIntent(PendingIntent.getActivity(this, target.id.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            .setContentIntent(PendingIntent.getActivity(this, challengeId.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .build()
-        notifications.notify(target.id, 0, notification)
+        notifications.notify(challengeId, 0, notification)
     }
 }
 

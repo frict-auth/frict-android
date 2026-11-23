@@ -7,7 +7,6 @@
 //	store fid USER_ID          the device's stored FID
 //	store setfid USER_ID FID   replaces the stored FID
 //	store challenge USER_ID    the oldest pending challenge's ID
-//	store alert USER_ID        the newest alert's ID
 //
 // Environment: E2E_DB (the database file).
 package main
@@ -48,15 +47,8 @@ func main() {
 			log.Fatalf("no pending challenge for %s", args[1])
 		}
 		fmt.Println(base64.RawURLEncoding.EncodeToString(cs[0].ID))
-	case len(args) == 2 && args[0] == "alert":
-		as, err := s.Alerts(ctx, args[1], time.Time{})
-		check(err)
-		if len(as) == 0 {
-			log.Fatalf("no alert for %s", args[1])
-		}
-		fmt.Println(base64.RawURLEncoding.EncodeToString(as[len(as)-1].ID))
 	default:
-		log.Fatal("usage: store fid USER_ID | store setfid USER_ID FID | store challenge USER_ID | store alert USER_ID")
+		log.Fatal("usage: store fid USER_ID | store setfid USER_ID FID | store challenge USER_ID")
 	}
 }
 

@@ -3,7 +3,6 @@ package app.frict.android
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.KeyguardManager
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -14,7 +13,6 @@ import android.os.CancellationSignal
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -43,13 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -61,8 +53,10 @@ class MainActivity : ComponentActivity() {
     private var busy by mutableStateOf(false)
     private var challenge by mutableStateOf<Challenge?>(null)
     private var pollError by mutableStateOf<String?>(null)
-    private var alerts by mutableStateOf<List<Alert>>(emptyList())
     private var confirmingRemove by mutableStateOf(false)
+
+    /** Why the server could not be told of a removal, while offering to remove anyway. */
+    private var serverNotTold by mutableStateOf<String?>(null)
     private var scanning by mutableStateOf(false)
 
     // The check is for FragmentActivity, whose versions before fragment 1.3.0 lose results;
@@ -221,9 +215,9 @@ class MainActivity : ComponentActivity() {
         challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
         status?.let { Text(it) }
         pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
-        alerts.forEach { AlertCard(it) }
         OutlinedButton(onClick = { confirmingRemove = true }, enabled = !busy) { Text(stringResource(R.string.remove_phone)) }
         if (confirmingRemove) RemoveDialog()
+        serverNotTold?.let { RemoveAnywayDialog(it) }
     }
 
     @Composable
@@ -237,62 +231,53 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    @Composable
+    private fun RemoveAnywayDialog(reason: String) {
+        AlertDialog(
+            onDismissRequest = { serverNotTold = null },
+            title = { Text(stringResource(R.string.server_not_told_title)) },
+            text = { Text(stringResource(R.string.server_not_told, reason)) },
+            confirmButton = { TextButton(onClick = ::removeAnyway) { Text(stringResource(R.string.remove_anyway)) } },
+            dismissButton = { TextButton(onClick = { serverNotTold = null }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
     private fun remove() {
         confirmingRemove = false
+        val current = account ?: return
         busy = true
+        status = null
         accountThread.execute {
-            val removed = unenroll(PrefsAccountStore(applicationContext), ::deleteKeys)
+            val result = removePhone({ approvals(current).remove() }, PrefsAccountStore(applicationContext), ::deleteKeys)
             runOnUiThread {
                 busy = false
-                if (removed) {
-                    account = null
-                    show(null)
-                    alerts = emptyList()
-                    pollError = null
-                    link = ""
-                    status = getString(R.string.removed)
-                } else {
-                    status = getString(R.string.not_removed)
+                when (result) {
+                    RemoveResult.Removed -> showRemoved()
+                    RemoveResult.NotRemovedHere -> status = getString(R.string.not_removed_here)
+                    is RemoveResult.ServerNotTold -> serverNotTold = result.reason
                 }
             }
         }
     }
 
-    @Composable
-    private fun AlertCard(a: Alert) {
-        Text(stringResource(R.string.alert_title), style = MaterialTheme.typography.titleLarge)
-        if (a.username.isNotEmpty()) Text(stringResource(R.string.alert_user, a.username))
-        if (a.ipaddr.isNotEmpty()) Text(stringResource(R.string.request_from, a.ipaddr))
-        a.pushinfo.forEach { (key, value) -> Text(stringResource(R.string.request_field, key, value)) }
-        if (a.type.isNotEmpty()) Text(a.type)
-        Text(stringResource(R.string.alert_attempted, formatTime(a.attempted)))
-        Text(stringResource(R.string.alert_reported, formatTime(a.reported)))
-        AlertLink(stringResource(R.string.reset_password), a.resetPasswordUrl)
-        AlertLink(stringResource(R.string.revoke_sessions), a.revokeSessionsUrl)
+    private fun removeAnyway() {
+        serverNotTold = null
+        busy = true
+        accountThread.execute {
+            val removed = unenroll(PrefsAccountStore(applicationContext), ::deleteKeys)
+            runOnUiThread {
+                busy = false
+                if (removed) showRemoved() else status = getString(R.string.not_removed)
+            }
+        }
     }
 
-    @Composable
-    private fun AlertLink(label: String, url: String) {
-        val openable = openableLink(url)
-        if (openable == null) {
-            Text(stringResource(R.string.link_not_opened, label, url))
-            return
-        }
-        Text(
-            label,
-            color = MaterialTheme.colorScheme.primary,
-            textDecoration = TextDecoration.Underline,
-            modifier = Modifier.clickable { openInBrowser(openable) },
-        )
-    }
-
-    private fun openInBrowser(url: String) {
-        val intent = Intent(Intent.ACTION_VIEW, url.toUri()).addCategory(Intent.CATEGORY_BROWSABLE)
-        try {
-            startActivity(intent)
-        } catch (_: ActivityNotFoundException) {
-            status = getString(R.string.no_browser, url)
-        }
+    private fun showRemoved() {
+        account = null
+        show(null)
+        pollError = null
+        link = ""
+        status = getString(R.string.removed)
     }
 
     @Composable
@@ -321,10 +306,7 @@ class MainActivity : ComponentActivity() {
         if (generation != pollGeneration.get()) return
         val result = PrefsAccountStore(applicationContext).load()?.let { approvals(it).poll(shownId) }
         result?.let {
-            runOnUiThread {
-                apply(it.update)
-                it.alerts?.let { shown -> alerts = shown }
-            }
+            runOnUiThread { apply(it.update) }
         }
         accountThread.schedule({ poll(generation) }, result?.nextSeconds ?: DEFAULT_POLL_SECONDS, TimeUnit.SECONDS)
     }
@@ -472,7 +454,3 @@ private fun isDeviceSecure(context: Context): Boolean = context.getSystemService
 private fun hasStrongBiometric(context: Context): Boolean =
     context.getSystemService(BiometricManager::class.java)
         .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
-
-private val timeFormat = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault())
-
-private fun formatTime(unixSeconds: Long): String = timeFormat.format(Instant.ofEpochSecond(unixSeconds))

@@ -17,15 +17,18 @@ The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
 twice. `screen-lock`, before any fingerprint exists, enrolls with the default
 unlock by scanning frict-server's QR code with the emulator's back camera
 (`-camera-back imagefile:`), approves a login by typing the PIN and removes the
-phone. Before the scan it refuses the camera once and shows a QR code that is
+phone: first with the server unreachable, where the app must offer "Remove
+anyway", then for real, after which the server must refuse `/auth` for the
+user. Before the scan it refuses the camera once and shows a QR code that is
 not an activation link; the camera must close when the app leaves the screen
 and once the link is scanned. Then a fingerprint is enrolled,
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
-approves a login and denies one as "not me" with the fingerprint sensor. Both
+approves a login, denies one as "not me" with the fingerprint sensor and
+removes the phone anyway with the server unreachable. Both
 check that the server holds the app's Firebase Installation ID after
 enrollment and again after a restart; `fingerprint` also hands the app a
-login and an alert push through firebase-messaging's receiver, as Play
-services delivers them, and opens the app from their notifications. It runs
+login push through firebase-messaging's receiver, as Play services delivers
+it, and opens the app from its notification. It runs
 frict-server at
 a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
@@ -108,10 +111,13 @@ Keystore fixes a key's unlock when it creates it, so the choice is saved with
 the account (not a secret) and shown on the main screen; changing it means
 removing this phone and enrolling again, with a new activation code.
 
-"Remove this phone", after a confirmation, deletes the saved account and both
-keys and returns to the enrollment screen. The server keeps its device record
-until an admin deletes the Duo device in Authentik. An account saved before the
-choice existed shows "Fingerprint only", which is what its key requires.
+"Remove this phone", after a confirmation, sends `/device/v1/remove` signed
+with the `device_key`, which deletes the enrollment on the server. On `200`, or
+`401` (already gone), it deletes the saved account, then both keys (kept if the
+account can't be deleted), and returns to the enrollment screen. If the server
+can't be reached or fails, the app says so and offers "Remove anyway", which
+removes the phone here only. An account saved before the choice existed shows
+"Fingerprint only", which is what its key requires.
 
 "Fingerprint" is Android's strong (Class 3) biometric: a Class 3 face unlock
 works too. Removing the screen lock invalidates either key. Adding a
@@ -128,10 +134,9 @@ project (see [docs/release.md](docs/release.md)). On every start the app
 registers with FCM and sends its FID to `/device/v1/fid`, signed with the
 `device_key`; FCM's `onRegistered` sends a new one the same way.
 
-A push carries only a challenge or alert ID. The app shows a high-priority
-notification for each (channels "Sign-in requests" and "Sign-ins reported as
-not theirs"), saying only that there is something to see. A login
-notification opens the app on its challenge, whose details the app fetches
+A push carries only a challenge ID. The app shows a high-priority
+notification for each (channel "Sign-in requests"), saying only that there is
+a sign-in request. It opens the app on its challenge, whose details the app fetches
 with the `device_key`. Polling stays: a missed push is found by the next poll.
 The app asks for the notification permission once enrolled.
 
