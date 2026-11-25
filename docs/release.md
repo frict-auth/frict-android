@@ -26,7 +26,7 @@ user-CA trust. It fails without:
   `main` can't use that environment, and nothing in this workflow runs on
   `pull_request`.
 
-## Setup (Geoffrey, on the desktop)
+## Setup (a repository admin, on the workstation)
 
 ### 1. Upload key
 
@@ -129,10 +129,12 @@ uploads; there is no manual upload.
 Before anyone installs it, check the App signing page: the upload key
 certificate must match step 1's, and the app signing key must differ from it.
 
-Testers: Testing → Internal testing → Testers. "Copy link" stays disabled
-until the app is published. Until then, install the "Signed, universal APK"
-(Test and release → Latest releases and app bundles → All app versions → the
-version → Downloads), which Google signs with the Play app signing key.
+Testers: Testing → Internal testing → Testers: tick a tester list and Save.
+The join link under "How testers join your test" becomes active once the
+app's second release reaches the internal track; testers install from that
+link. Before that, install the "Signed, universal APK" (Test and release →
+Latest releases and app bundles → All app versions → the version →
+Downloads), which Google signs with the Play app signing key.
 
 ### 6. At M3: release API key
 
