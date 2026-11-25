@@ -98,6 +98,7 @@ sealed interface RemoveResult {
 fun removePhone(tellServer: () -> ServerRemoval, store: AccountStore, deleteKeys: () -> Unit): RemoveResult =
     when (val told = tellServer()) {
         is ServerRemoval.NotTold -> RemoveResult.ServerNotTold(told.reason)
+        UpdateRequired -> UpdateRequired
         ServerRemoval.Removed, ServerRemoval.AlreadyGone ->
             if (unenroll(store, deleteKeys)) RemoveResult.Removed else RemoveResult.NotRemovedHere
     }
@@ -136,6 +137,7 @@ class Enroller(
         val auth = authorization(newKeys.deviceSigner, activation.userId, unixSeconds(), ENROLL_PATH, body)
         return when (val response = api(activation.host).post(ENROLL_PATH, body, auth)) {
             is DeviceResponse.NetworkError -> EnrollResult.NetworkError(response.message)
+            UpdateRequired -> UpdateRequired
             is DeviceResponse.Ok -> when (response.status) {
                 HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode).let {
                     if (store.save(it)) EnrollResult.Enrolled(it) else EnrollResult.NotSaved

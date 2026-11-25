@@ -11,7 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import org.json.JSONArray
 import org.json.JSONObject
 
-class RecordedRequest(val path: String, val authorization: String, val body: ByteArray) {
+class RecordedRequest(val path: String, val authorization: String, val appVersion: String?, val body: ByteArray) {
     val json get() = JSONObject(String(body, Charsets.UTF_8))
 }
 
@@ -23,7 +23,7 @@ enum class ChallengeState { PENDING, APPROVED, DENIED_CANCEL, DENIED_NOT_ME, EXP
  * want the enrolled device_key, answer the enrolled approval_key. Challenges are added
  * with [addChallenge] and their state is in [challenges]. fid, signed with the device_key,
  * sets [fid]; remove, signed with the device_key, forgets both keys. [failWith] answers
- * every request with that status instead.
+ * every request with that status instead, and [updateRequired] with 426 app_update_required.
  */
 class FakeFrictServer(private val userId: String, private val code: String) : AutoCloseable {
     val requests = CopyOnWriteArrayList<RecordedRequest>()
@@ -32,6 +32,9 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
 
     @Volatile
     var failWith: Int? = null
+
+    @Volatile
+    var updateRequired = false
 
     @Volatile
     var fid: String? = null
@@ -45,6 +48,7 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
                 val request = RecordedRequest(
                     it.requestURI.path,
                     it.requestHeaders.getFirst("Authorization").orEmpty(),
+                    it.requestHeaders.getFirst(APP_VERSION_HEADER),
                     it.requestBody.readBytes(),
                 )
                 requests += request
@@ -80,7 +84,12 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
     }
 
     @Synchronized
-    private fun handle(r: RecordedRequest): Pair<Int, String> = failWith?.let { it to """{"error":"internal"}""" } ?: when (r.path) {
+    private fun handle(r: RecordedRequest): Pair<Int, String> = when {
+        updateRequired -> 426 to """{"error":"app_update_required","min_version":2000000}"""
+        else -> failWith?.let { it to """{"error":"internal"}""" } ?: route(r)
+    }
+
+    private fun route(r: RecordedRequest): Pair<Int, String> = when (r.path) {
         ENROLL_PATH -> if (acceptsEnroll(r)) 200 to "{}" else unauthorized
         PENDING_PATH -> when {
             !verifies(r, deviceKey) -> unauthorized

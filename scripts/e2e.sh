@@ -19,10 +19,16 @@
 #    types PIN; fingerprint: touches the sensor), and requires /auth to return
 #    allow.
 # screen-lock only:
-# 3. Remove: with the server unreachable, "Remove this phone" must say the
+# 3. Update: with every request answered 426 app_update_required (only if it
+#    carries a numeric Frict-App-Version), the app must show "Update Frict",
+#    whose button opens the app's Play listing.
+# 4. Key lost: removing the screen lock invalidates the approval_key; the app
+#    must say so and offer only "Remove this phone".
+# 5. Remove: with the server unreachable, "Remove this phone" must say the
 #    server could not be told and offer "Remove anyway"; Cancel keeps the
 #    enrollment. With the server back, removal must return to the enrollment
-#    screen, and /auth for the user must then get 400, code 40002.
+#    screen, and /auth for the user must then get 400, code 40002. The PIN is
+#    set again for what runs next.
 # fingerprint only:
 # 3. Push: with the app in the background, starts a login and hands the app
 #    the push frict-server would send, through FCM's receiver as Play services
@@ -103,14 +109,19 @@ openssl x509 -req -in "$work/frict.csr" -CA "$secrets/ca.pem" -CAkey "$work/ca.k
     "keyUsage=critical,digitalSignature" "extendedKeyUsage=serverAuth") \
   -out "$secrets/frict.pem" 2>/dev/null
 openssl rand -hex 20 >"$secrets/duo-client-secret"
-cat >"$work/tls.conf" <<CONF
+# tls_conf LOCATION: the TLS front's config, whose location / does LOCATION.
+tls_conf() {
+  cat >"$work/tls.conf" <<CONF
 server {
     listen 443 ssl;
     ssl_certificate     /secrets/frict.pem;
     ssl_certificate_key /secrets/frict.key;
-    location / { proxy_pass http://frict-server:8080; }
+    location / { $1 }
 }
 CONF
+}
+PROXY='proxy_pass http://frict-server:8080;'
+tls_conf "$PROXY"
 chmod 0644 "$secrets"/* "$work/tls.conf"
 
 # The server runs as this user, so the store helper can open its database.
@@ -378,7 +389,46 @@ server_unreachable() {
   echo "server unreachable"
 }
 
+# serve LOCATION: reloads the TLS front with LOCATION. The config is bind
+# mounted, so it is rewritten in place.
+serve() {
+  tls_conf "$1"
+  docker exec "$NAME-tls" nginx -s reload 2>/dev/null
+  sleep 1
+}
+
 if [[ $MODE == screen-lock ]]; then
+  serve 'if ($http_frict_app_version !~ "^[0-9]+$") { return 400 "{\"error\":\"no_app_version\"}"; }
+    default_type application/json;
+    return 426 "{\"error\":\"app_update_required\",\"min_version\":2147483647}";'
+  wait_for_text "Update Frict"
+  wait_for_text "This version of Frict is too old for the server. Update it to approve sign-ins."
+  adb logcat -c
+  tap_text "Update Frict"
+  # ActivityTaskManager logs the start, with the URL cut after the host; the
+  # window manager logs the whole link it opened.
+  started="START u0 {act=android.intent.action.VIEW dat=https://play.google.com/"
+  listing="https://play.google.com/store/apps/details?id=$PACKAGE"
+  for ((i = 0; i < 15; i++)); do
+    log=$(adb logcat -d)
+    grep -F "$started" <<<"$log" | grep -qF "($PACKAGE)" && grep -qF "$listing" <<<"$log" && break
+    sleep 1
+  done
+  grep -F "$started" <<<"$log" | grep -qF "($PACKAGE)" && grep -qF "$listing" <<<"$log" ||
+    { echo "the app opened no $listing after tapping Update Frict" >&2; exit 1; }
+  echo "426 app_update_required: the app shows Update Frict, which opens its Play listing"
+  serve "$PROXY"
+  adb shell am start -W -n "$PACKAGE/$ACTIVITY" >/dev/null
+
+  # Keystore deletes auth-bound keys once the screen lock is gone; the app
+  # checks its approval_key whenever it comes back to the screen.
+  adb shell locksettings clear --old "$PIN" >/dev/null
+  adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.HOME >/dev/null
+  adb shell am start -W -n "$PACKAGE/$ACTIVITY" >/dev/null
+  wait_for_text "This phone can't approve sign-ins"
+  wait_for_text "Android invalidated its approval key. With Fingerprint or screen lock, that happens when the screen lock is removed. Remove this phone, then enroll it again."
+  echo "screen lock removed: the app says the approval key is invalidated"
+
   server_unreachable
   start_removal
   wait_for_text "The server could not be told"
@@ -400,6 +450,7 @@ if [[ $MODE == screen-lock ]]; then
   [[ $gone == *"HTTP 400 "*'"code":40002'*'"Invalid request parameters: user_id"'* ]] ||
     { echo "/auth after removal: $gone, want HTTP 400 code 40002 for user_id" >&2; exit 1; }
   echo "the server no longer knows the removed device"
+  adb shell locksettings set-pin "$PIN" >/dev/null
   exit 0
 fi
 
