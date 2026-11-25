@@ -2,6 +2,7 @@ package app.frict.android
 
 import android.hardware.biometrics.BiometricManager.Authenticators
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import java.security.KeyPairGenerator
@@ -93,9 +94,15 @@ class KeystoreKeyMaker(private val hasStrongBox: Boolean) : KeyMaker {
     }
 }
 
+/** Which key Android invalidated or deleted; worst last. */
+enum class LostKey { APPROVAL_KEY, DEVICE_KEY }
+
+/** [key] is gone from Keystore or permanently invalidated: only enrolling again fixes it. */
+class KeyLostException(val key: LostKey, cause: Throwable? = null) : Exception("the ${key.name.lowercase()} is gone", cause)
+
 fun keystoreSigner(alias: String) = Signer { data ->
     Signature.getInstance("SHA256withECDSA").run {
-        initSign(keyStore().getKey(alias, null) as PrivateKey)
+        initSignOrLost(alias, LostKey.DEVICE_KEY)
         update(data)
         sign()
     }
@@ -106,7 +113,24 @@ fun keystoreSigner(alias: String) = Signer { data ->
  * sign once, and only after that prompt succeeds.
  */
 fun approvalSignature(): Signature = Signature.getInstance("SHA256withECDSA").apply {
-    initSign(keyStore().getKey(APPROVAL_KEY_ALIAS, null) as PrivateKey)
+    initSignOrLost(APPROVAL_KEY_ALIAS, LostKey.APPROVAL_KEY)
+}
+
+/** The approval_key if Keystore lost it, else null; an unusable Keystore throws. */
+fun lostApprovalKey(): LostKey? = try {
+    approvalSignature()
+    null
+} catch (e: KeyLostException) {
+    e.key
+}
+
+private fun Signature.initSignOrLost(alias: String, key: LostKey) {
+    val privateKey = keyStore().getKey(alias, null) as PrivateKey? ?: throw KeyLostException(key)
+    try {
+        initSign(privateKey)
+    } catch (e: KeyPermanentlyInvalidatedException) {
+        throw KeyLostException(key, e)
+    }
 }
 
 /** Signs once with an authenticated [Signature], such as a BiometricPrompt result's. */

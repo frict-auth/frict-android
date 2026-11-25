@@ -3,6 +3,7 @@ package app.frict.android
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.KeyguardManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
 import android.os.CancellationSignal
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -42,6 +44,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -58,6 +61,12 @@ class MainActivity : ComponentActivity() {
     /** Why the server could not be told of a removal, while offering to remove anyway. */
     private var serverNotTold by mutableStateOf<String?>(null)
     private var scanning by mutableStateOf(false)
+
+    /** Set once Keystore lost a key: the only way on is removing this phone. */
+    private var keyLost by mutableStateOf<LostKey?>(null)
+
+    /** The server answered a request with 426: this version must be updated. */
+    private var updateRequired by mutableStateOf(false)
 
     // The check is for FragmentActivity, whose versions before fragment 1.3.0 lose results;
     // this is a ComponentActivity, and fragment 1.1.0 is on the classpath only through Firebase.
@@ -92,6 +101,7 @@ class MainActivity : ComponentActivity() {
                         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
+                        if (updateRequired) UpdatePrompt()
                         account?.let { Enrolled(it) } ?: EnrollForm()
                     }
                 }
@@ -102,7 +112,41 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         val generation = pollGeneration.incrementAndGet()
+        accountThread.execute { checkApprovalKey() }
         accountThread.execute { poll(generation) }
+    }
+
+    /** On the account thread: whether Keystore still holds a usable approval_key. */
+    private fun checkApprovalKey() {
+        if (PrefsAccountStore(applicationContext).load() == null) return
+        val lost = try {
+            lostApprovalKey()
+        } catch (e: Exception) {
+            Log.w(TAG, "could not check the approval key", e)
+            null
+        }
+        lost?.let { runOnUiThread { lose(it) } }
+    }
+
+    private fun lose(key: LostKey) {
+        if (account == null) return
+        keyLost = maxOf(key, keyLost ?: key)
+        show(null)
+    }
+
+    @Composable
+    private fun UpdatePrompt() {
+        Text(stringResource(R.string.update_required))
+        Button(onClick = ::openPlayListing) { Text(stringResource(R.string.update_frict)) }
+    }
+
+    private fun openPlayListing() {
+        val listing = "https://play.google.com/store/apps/details?id=$packageName".toUri()
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, listing))
+        } catch (_: ActivityNotFoundException) {
+            status = getString(R.string.no_play_store)
+        }
     }
 
     override fun onPause() {
@@ -213,9 +257,15 @@ class MainActivity : ComponentActivity() {
     private fun Enrolled(account: Account) {
         Text(stringResource(R.string.enrolled, account.userId, account.host))
         Text(stringResource(R.string.unlocks_with, stringResource(account.unlockMode.label)))
-        challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
+        val lost = keyLost
+        if (lost != null) {
+            Text(stringResource(R.string.key_lost_title), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(lost.explanation(account.unlockMode)))
+        } else {
+            challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
+        }
         status?.let { Text(it) }
-        pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
+        if (lost == null) pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
         OutlinedButton(onClick = { confirmingRemove = true }, enabled = !busy) { Text(stringResource(R.string.remove_phone)) }
         if (confirmingRemove) RemoveDialog()
         serverNotTold?.let { RemoveAnywayDialog(it) }
@@ -256,6 +306,7 @@ class MainActivity : ComponentActivity() {
                     RemoveResult.Removed -> showRemoved()
                     RemoveResult.NotRemovedHere -> status = getString(R.string.not_removed_here)
                     is RemoveResult.ServerNotTold -> serverNotTold = result.reason
+                    UpdateRequired -> updateRequired = true
                 }
             }
         }
@@ -275,6 +326,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showRemoved() {
         account = null
+        keyLost = null
         show(null)
         pollError = null
         link = ""
@@ -314,8 +366,9 @@ class MainActivity : ComponentActivity() {
 
     private fun apply(update: PollUpdate) {
         if (update !is PollUpdate.Failed) pollError = null
+        if (update != UpdateRequired && update !is PollUpdate.Failed) updateRequired = false
         when (update) {
-            is PollUpdate.Show -> if (challenge == null) {
+            is PollUpdate.Show -> if (challenge == null && keyLost == null) {
                 show(update.challenge)
                 status = null
             }
@@ -325,6 +378,8 @@ class MainActivity : ComponentActivity() {
             }
             PollUpdate.NoChange -> Unit
             is PollUpdate.Failed -> pollError = update.message
+            is PollUpdate.KeyLost -> lose(update.key)
+            UpdateRequired -> updateRequired = true
         }
     }
 
@@ -333,6 +388,9 @@ class MainActivity : ComponentActivity() {
         val mode = account?.unlockMode ?: return
         val signature = try {
             approvalSignature()
+        } catch (e: KeyLostException) {
+            lose(e.key)
+            return
         } catch (e: Exception) {
             status = getString(R.string.approval_key_unavailable, e.message ?: e.javaClass.simpleName)
             return
@@ -379,6 +437,10 @@ class MainActivity : ComponentActivity() {
             val result = approvals(current).answer(c.id, answer, approvalSigner)
             runOnUiThread {
                 busy = false
+                if (result == UpdateRequired) {
+                    updateRequired = true
+                    return@runOnUiThread
+                }
                 if (challenge?.id == c.id) show(null)
                 status = describe(result)
             }
@@ -395,6 +457,7 @@ class MainActivity : ComponentActivity() {
         )
         AnswerResult.NotPending -> getString(R.string.not_pending)
         AnswerResult.NotFound -> getString(R.string.not_found)
+        UpdateRequired -> getString(R.string.update_required)
         is AnswerResult.Rejected -> getString(R.string.answer_rejected, result.status, result.error)
         is AnswerResult.NetworkError -> getString(R.string.network_error, result.message)
     }
@@ -421,6 +484,7 @@ class MainActivity : ComponentActivity() {
                 busy = false
                 when (result) {
                     is EnrollResult.Enrolled -> enrolled(result.account)
+                    UpdateRequired -> updateRequired = true
                     else -> status = describe(result)
                 }
             }
@@ -435,6 +499,18 @@ class MainActivity : ComponentActivity() {
         is EnrollResult.Rejected -> getString(R.string.enroll_rejected, result.status)
         is EnrollResult.NetworkError -> getString(R.string.network_error, result.message)
         EnrollResult.NotSaved -> getString(R.string.not_saved)
+        UpdateRequired -> getString(R.string.update_required)
+    }
+}
+
+private const val TAG = "Frict"
+
+/** What happened to this key, for an account whose approval_key [mode] unlocks. */
+fun LostKey.explanation(mode: UnlockMode): Int = when (this) {
+    LostKey.DEVICE_KEY -> R.string.device_key_lost
+    LostKey.APPROVAL_KEY -> when (mode) {
+        UnlockMode.FINGERPRINT_ONLY -> R.string.approval_key_lost_fingerprint_only
+        UnlockMode.FINGERPRINT_OR_SCREEN_LOCK -> R.string.approval_key_lost_fingerprint_or_screen_lock
     }
 }
 

@@ -42,6 +42,9 @@ sealed interface PollUpdate {
 
     data object NoChange : PollUpdate
     data class Failed(val message: String) : PollUpdate
+
+    /** Keystore lost [key], so nothing can be signed with it again. */
+    data class KeyLost(val key: LostKey) : PollUpdate
 }
 
 data class Poll(val update: PollUpdate, val nextSeconds: Long)
@@ -86,8 +89,15 @@ class Approvals(
     private val unixSeconds: () -> Long,
 ) {
     /** One poll, given the ID of the challenge on screen, if any. */
-    fun poll(shownId: String?): Poll {
+    fun poll(shownId: String?): Poll = try {
+        pollOnce(shownId)
+    } catch (e: KeyLostException) {
+        Poll(PollUpdate.KeyLost(e.key), DEFAULT_POLL_SECONDS)
+    }
+
+    private fun pollOnce(shownId: String?): Poll {
         val response = post(PENDING_PATH, JSONObject(), deviceSigner)
+        if (response == UpdateRequired) return Poll(UpdateRequired, DEFAULT_POLL_SECONDS)
         val pending = (response as? DeviceResponse.Ok)?.takeIf { it.status == HttpURLConnection.HTTP_OK }?.let(::parsePending)
             ?: return Poll(PollUpdate.Failed(describe(response)), DEFAULT_POLL_SECONDS)
         val (ids, next) = pending
@@ -100,11 +110,16 @@ class Approvals(
     }
 
     /** Challenge [id], as a push names it: its details come from the server, never the push. */
-    fun open(id: String): PollUpdate = fetch(id)
+    fun open(id: String): PollUpdate = try {
+        fetch(id)
+    } catch (e: KeyLostException) {
+        PollUpdate.KeyLost(e.key)
+    }
 
     /** Tells the server to push to [fid] from now on. */
     fun sendFid(fid: String): FidResult = when (val response = post(FID_PATH, JSONObject().put("fid", fid), deviceSigner)) {
         is DeviceResponse.NetworkError -> FidResult.NetworkError(response.message)
+        UpdateRequired -> UpdateRequired
         is DeviceResponse.Ok ->
             if (response.status == HttpURLConnection.HTTP_OK) FidResult.Sent else FidResult.Rejected(response.status, errorCode(response.body))
     }
@@ -117,6 +132,7 @@ class Approvals(
             return ServerRemoval.NotTold(e.message ?: e.javaClass.simpleName)
         }
         return when {
+            response == UpdateRequired -> UpdateRequired
             response is DeviceResponse.Ok && response.status == HttpURLConnection.HTTP_OK -> ServerRemoval.Removed
             response is DeviceResponse.Ok && response.status == HttpURLConnection.HTTP_UNAUTHORIZED -> ServerRemoval.AlreadyGone
             else -> ServerRemoval.NotTold(describe(response))
@@ -125,6 +141,7 @@ class Approvals(
 
     private fun fetch(id: String): PollUpdate {
         val response = post(CHALLENGE_PATH, JSONObject().put("challenge_id", id), deviceSigner)
+        if (response == UpdateRequired) return UpdateRequired
         if (response is DeviceResponse.Ok && response.status == HttpURLConnection.HTTP_NOT_FOUND) return PollUpdate.NoChange
         val challenge = (response as? DeviceResponse.Ok)?.takeIf { it.status == HttpURLConnection.HTTP_OK }?.let(::parseChallenge)
         return challenge?.let { PollUpdate.Show(it) } ?: PollUpdate.Failed(describe(response))
@@ -136,6 +153,7 @@ class Approvals(
         answer.reason?.let { body.put("reason", it) }
         return when (val response = post(ANSWER_PATH, body, approvalSigner)) {
             is DeviceResponse.NetworkError -> AnswerResult.NetworkError(response.message)
+            UpdateRequired -> UpdateRequired
             is DeviceResponse.Ok -> when (response.status) {
                 HttpURLConnection.HTTP_OK -> AnswerResult.Answered(answer)
                 HttpURLConnection.HTTP_CONFLICT -> AnswerResult.NotPending
@@ -191,5 +209,6 @@ private fun errorCode(body: String): String = try {
 
 private fun describe(response: DeviceResponse): String = when (response) {
     is DeviceResponse.NetworkError -> response.message
+    UpdateRequired -> "app update required"
     is DeviceResponse.Ok -> "HTTP ${response.status} ${errorCode(response.body)}".trim()
 }

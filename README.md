@@ -16,10 +16,13 @@ scripts/emulator.sh   # headless emulator (KVM): instrumented tests and the e2e
 The emulator gets a PIN, and the e2e (`scripts/e2e.sh`, needs docker) runs
 twice. `screen-lock`, before any fingerprint exists, enrolls with the default
 unlock by scanning frict-server's QR code with the emulator's back camera
-(`-camera-back imagefile:`), approves a login by typing the PIN and removes the
-phone: first with the server unreachable, where the app must offer "Remove
-anyway", then for real, after which the server must refuse `/auth` for the
-user. Before the scan it refuses the camera once and shows a QR code that is
+(`-camera-back imagefile:`) and approves a login by typing the PIN. With the
+TLS front answering 426 `app_update_required`, the app must show "Update
+Frict", which opens its Play listing. Then it removes the screen lock, which
+makes Keystore delete the `approval_key`; the app must say so and offer only
+"Remove this phone", which it does first with the server unreachable, where
+the app must offer "Remove anyway", then for real, after which the server must
+refuse `/auth` for the user. Before the scan it refuses the camera once and shows a QR code that is
 not an activation link; the camera must close when the app leaves the screen
 and once the link is scanned. Then a fingerprint is enrolled,
 the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
@@ -120,10 +123,27 @@ removes the phone here only. An account saved before the choice existed shows
 "Fingerprint only", which is what its key requires.
 
 "Fingerprint" is Android's strong (Class 3) biometric: a Class 3 face unlock
-works too. Removing the screen lock invalidates either key. Adding a
-fingerprint, or removing them all, invalidates a "Fingerprint only" key; a
-"Fingerprint or screen lock" key is bound to the screen lock alone and
-survives both.
+works too. Removing the screen lock invalidates either key (Keystore deletes
+it). Adding a fingerprint, or removing them all, invalidates a "Fingerprint
+only" key; a "Fingerprint or screen lock" key is bound to the screen lock alone
+and survives both.
+
+The app checks the `approval_key` each time it comes to the screen and before
+each answer, and the `device_key` on each signed request. When Keystore has
+lost either, the main screen says what happened and offers only "Remove this
+phone", the same server-first removal. Without the `device_key` the server
+can't be told, so that ends in "Remove anyway".
+
+## Minimum app version
+
+Every request sends `Frict-App-Version: <versionCode>`. The header is not part
+of the signed bytes: it is an upgrade nudge, not a security control, and a
+client can send any number. If the server answers HTTP 426 with
+`{"error":"app_update_required","min_version":N}`, the app shows "Update
+Frict", whose button opens the app's Play listing, and does nothing else with
+that request: no answer is retried, nothing is removed or saved, and no
+"Remove anyway" is offered. Any other status is handled as before. A later
+successful poll hides the prompt.
 
 ## Push
 
