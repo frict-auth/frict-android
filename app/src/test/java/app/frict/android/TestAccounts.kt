@@ -13,4 +13,6 @@ class MemoryAccountStore(vararg initial: Account) : AccountStore {
     override fun add(account: Account) = writesSucceed.also { if (it) accounts += account }
 
     override fun remove(account: Account) = writesSucceed.also { if (it) accounts -= account }
+
+    override fun replace(old: Account, new: Account) = writesSucceed.also { if (it) accounts.replaceAll { a -> if (a == old) new else a } }
 }

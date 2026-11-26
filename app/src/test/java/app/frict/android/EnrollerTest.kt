@@ -74,7 +74,7 @@ class EnrollerTest {
 
     @Test
     fun enrollsAndSavesTheActivationsUser() {
-        val want = Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK, aliases)
+        val want = Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK, aliases, "alice @ api.frict.test")
         assertEquals(EnrollResult.Enrolled(want), enroller.enroll(link, UnlockMode.FINGERPRINT_OR_SCREEN_LOCK))
         assertEquals(listOf(want), store.accounts)
         assertEquals(listOf(aliases), keys.made)
@@ -163,7 +163,7 @@ class EnrollerTest {
         val other = testAccount("DU234567234567234567234567AB", host = "other.frict.test")
         store.accounts += other
         val got = enroller.enroll(link, UnlockMode.FINGERPRINT_ONLY)
-        assertEquals(EnrollResult.Enrolled(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY, aliases)), got)
+        assertEquals(EnrollResult.Enrolled(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY, aliases, "alice @ api.frict.test")), got)
         assertEquals(listOf(other, (got as EnrollResult.Enrolled).account), store.accounts)
     }
 

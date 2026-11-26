@@ -93,13 +93,19 @@ Monday at 06:00 UTC.
 
 The app holds several accounts, for example an operator's own and a separate
 admin account, on one server or several. Each is an independent enrollment
-on its server: its own host, user ID, unlock choice, and `device_key` and
-`approval_key` under their own Keystore aliases. The main screen lists them
-with their unlock choice; "Add an account" (or opening an activation link)
-enrolls another. A link for a user already on this phone, by host and user ID,
-is refused. Every pending request, notification and unlock prompt names the
-account it is for: the username the server sends with the request and the
-server's host. Removing an account, and a lost key, affect that account only.
+on its server: its own host, user ID, unlock choice, label, and `device_key`
+and `approval_key` under their own Keystore aliases. The main screen lists them
+by label with their unlock choice; "Add an account" (or opening an activation
+link) enrolls another. A link for a user already on this phone, by host and
+user ID, is refused. Every pending request, notification and unlock prompt
+names the account it is for by its label. Removing an account, and a lost key,
+affect that account only.
+
+The label is set at enrollment: the app suggests `<username> @ <hostname>`,
+from the username in the server's enroll reply and the link's host, and the
+person enrolling can change it. Left empty it is the suggestion; it is cut to
+64 characters. It stays on the phone. An account enrolled before labels shows
+its hostname and the start of its user ID until it is enrolled again.
 
 An enrollment saved by an app version with a single account becomes the first
 account on the first start, its keys kept where they are.

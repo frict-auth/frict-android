@@ -10,7 +10,8 @@
 #    back camera (CAMERA_IMAGE, scripts/emulator.sh's -camera-back image), after
 #    refusing the camera once, rejecting a QR code that is not an activation
 #    link, and requiring the camera to close when the app leaves the screen and
-#    once the link is scanned.
+#    once the link is scanned. The app must suggest the label
+#    "<username> @ <host>"; it is saved as suggested.
 #    The server must hold the app's Firebase Installation ID, registered with
 #    Firebase (which the dev API key's package and certificate restriction
 #    allows), and get it again on the app's next start.
@@ -32,12 +33,13 @@
 # fingerprint only, with a second user (the admin account) enrolled beside the
 # first, unlocked with fingerprint or screen lock:
 # 3. Accounts: the first user's link again must be refused; the admin's link
-#    adds a second account, both shown with their unlock modes, and the server
-#    must hold the app's FID for both users, again after the next start.
+#    adds a second account, its suggested label replaced by a typed one; both
+#    are shown with their labels and unlock modes, and the server must hold
+#    the app's FID for both users, again after the next start.
 # 4. Push: with the app in the background, starts an admin login and hands the
 #    app the push frict-server would send, through FCM's receiver as Play
 #    services delivers it, with made-up details beside the ID. Its notification
-#    must name the admin account, open the app on the challenge with the
+#    must name the admin account by its label, open the app on the challenge with the
 #    server's details, never the push's, and Approve must reach /auth. Deny on
 #    the first user's next login must reach its /auth.
 # 5. Not me: the first user's next login, denied with "Not me": /auth must
@@ -318,8 +320,17 @@ fi
 wait_for_text Enroll
 [[ $MODE == fingerprint ]] && tap_text "$MODE_LABEL"
 
-# enroll USER_ID LINK: taps Enroll on LINK's form and requires the server to
-# report USER_ID enrolled.
+user_label="android-e2e @ $API_HOST"
+admin_label="Admin desk"
+
+# label_of USER_ID: the label the app shows for USER_ID's account.
+label_of() {
+  if [[ $1 == "$user_id" ]]; then echo "$user_label"; else echo "$admin_label"; fi
+}
+
+# enroll USER_ID LINK USERNAME: taps Enroll on LINK's form, requires the server
+# to report USER_ID enrolled and the label to be suggested as
+# "USERNAME @ <host>", and saves USER_ID's label, typing it if it differs.
 enroll() {
   local i failed after
   tap_text Enroll
@@ -339,9 +350,20 @@ enroll() {
   done
   echo "enroll_status of $1 after the app enrolled: $after"
   [[ $after == success ]] || { echo "enroll_status of $1 after the app enrolled: $after, want success" >&2; exit 1; }
-  wait_for_text "Enrolled as $1 with $API_HOST"
+  wait_for_text "Name this account"
+  wait_for_text "$3 @ $API_HOST"
+  echo "label suggested: $3 @ $API_HOST"
+  if [[ $(label_of "$1") != "$3 @ $API_HOST" ]]; then
+    tap_text "$3 @ $API_HOST"
+    adb shell input keyevent KEYCODE_MOVE_END $(printf 'KEYCODE_DEL %.0s' {1..64})
+    adb shell input text "$(label_of "$1" | sed 's/ /%s/g')"
+    wait_for_text "$(label_of "$1")"
+    echo "label edited to: $(label_of "$1")"
+  fi
+  tap_text Save
+  wait_for_text "$(label_of "$1")"
 }
-enroll "$user_id" "$link"
+enroll "$user_id" "$link" android-e2e
 unlocks_with() { echo "Approve sign-ins with: $1. To change, remove the account, then enroll again."; }
 wait_for_text "$(unlocks_with "$MODE_LABEL")"
 
@@ -374,11 +396,11 @@ if [[ $MODE == fingerprint ]]; then
   wait_for_text "Add an account"
   wait_for_text Enroll
   tap_text "Fingerprint or screen lock"
-  enroll "$admin_id" "$admin_link"
-  wait_for_text "Enrolled as $user_id with $API_HOST"
+  enroll "$admin_id" "$admin_link" "$admin_username"
+  wait_for_text "$user_label"
   wait_for_text "$(unlocks_with "$MODE_LABEL")"
   wait_for_text "$(unlocks_with "Fingerprint or screen lock")"
-  echo "two accounts, each shown with its unlock mode"
+  echo "two accounts, each shown with its label and unlock mode"
   wait_server_fid "$admin_id" "$fid"
   echo "the server holds the app's FID for the admin account"
   store setfid "$admin_id" stale-e2e-fid
@@ -395,6 +417,7 @@ echo "the server holds the app's FID again for every account after the app's nex
 start_login() {
   auth_out=$work/auth-$RANDOM
   login_username=${2:-android-e2e}
+  login_label=$(label_of "${1:-$user_id}")
   duo auth "${1:-$user_id}" "$login_username" >"$auth_out" &
   auth_pid=$!
 }
@@ -406,7 +429,7 @@ answer() {
   local got
   # The details must be on screen before anything asks to unlock.
   wait_for_text "Sign-in request" 60
-  wait_for_text "For $login_username on $API_HOST"
+  wait_for_text "For $login_label"
   wait_for_text "From: 203.0.113.7"
   wait_for_text "Application: Frict Android e2e"
   if grep -qE 'mallory|198\.51\.100\.66' <<<"$(ui_dump)"; then
@@ -444,9 +467,9 @@ start_removal() {
   for ((i = 0; i < 3; i++)); do
     grep -qF 'text="Remove this account"' <<<"$(ui_dump)" || scroll_down
     tap_text "Remove this account"
-    wait_for_text "Remove $1 on $API_HOST?" 5 2>/dev/null && break
+    wait_for_text "Remove $(label_of "$1")?" 5 2>/dev/null && break
   done
-  wait_for_text "Remove $1 on $API_HOST?" 5
+  wait_for_text "Remove $(label_of "$1")?" 5
   tap_text Remove
 }
 
@@ -514,12 +537,12 @@ if [[ $MODE == screen-lock ]]; then
   wait_for_text "The server could not be told"
   wait_for_text "Remove anyway"
   tap_text Cancel
-  wait_for_text "Enrolled as $user_id with $API_HOST"
+  wait_for_text "$user_label"
   echo "unreachable server: the app offers Remove anyway; Cancel keeps the account"
   docker start "$NAME-tls" >/dev/null
   wait_healthy
   start_removal "$user_id"
-  wait_for_text "Removed $user_id on $API_HOST."
+  wait_for_text "Removed $user_label."
   wait_for_text "Not enrolled"
   echo "removed; back on the enrollment screen"
   removed_on_server "$user_id"
@@ -566,7 +589,7 @@ done
 [[ -n $challenge_id ]] || { echo "no pending challenge for $admin_id within 30s" >&2; exit 1; }
 push challenge_id="$challenge_id" username=mallory ipaddr=198.51.100.66
 echo "login push delivered"
-open_notification "Sign-in request" "For $admin_username on $API_HOST"
+open_notification "Sign-in request" "For $admin_label"
 answer Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
 
@@ -583,8 +606,8 @@ echo "/auth after the fraud report: $paused"
 
 adb logcat -c
 start_removal "$user_id"
-wait_for_text "Removed $user_id on $API_HOST."
-wait_for_text "Enrolled as $admin_id with $API_HOST"
+wait_for_text "Removed $user_label."
+wait_for_text "$admin_label"
 removed_on_server "$user_id"
 installation_kept "$fid"
 echo "removed the first account; the Firebase installation is kept"
@@ -595,7 +618,7 @@ server_unreachable
 start_removal "$admin_id"
 wait_for_text "The server could not be told"
 tap_text "Remove anyway"
-wait_for_text "Removed $admin_id on $API_HOST."
+wait_for_text "Removed $admin_label."
 wait_for_text "Not enrolled"
 [[ -n $(store fid "$admin_id") ]] || { echo "the server lost the device after a local-only removal" >&2; exit 1; }
 echo "removed anyway; the server still holds the device"

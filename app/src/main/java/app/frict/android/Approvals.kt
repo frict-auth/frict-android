@@ -26,9 +26,6 @@ data class Challenge(
     val expires: Long,
 )
 
-/** Who [account]'s server says this sign-in is for, or the account's user ID if it says nothing. */
-fun Challenge.accountName(account: Account) = username.ifEmpty { account.userId }
-
 /** The three answers `/device/v1/answer` accepts. */
 enum class Answer(val decision: String, val reason: String?) {
     APPROVE("approve", null),

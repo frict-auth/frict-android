@@ -60,7 +60,7 @@ class FrictMessagingService : FirebaseMessagingService() {
         val notification = Notification.Builder(this, LOGIN_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.notify_login))
-            .setContentText(getString(R.string.request_account, owned.challenge.accountName(owned.account), owned.account.host))
+            .setContentText(getString(R.string.request_account, owned.account.name))
             .setCategory(Notification.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(this, challengeId.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))

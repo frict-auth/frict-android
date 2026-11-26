@@ -9,7 +9,11 @@
     <string name="scanned_not_an_activation_link">That QR code is not a Frict activation link. It was not opened.</string>
     <string name="camera_refused">Without the camera, paste the activation link below or open it as a link on this phone.</string>
     <string name="camera_unavailable">Could not start the camera: %1$s. Paste the activation link instead.</string>
-    <string name="enrolled">Enrolled as %1$s with %2$s</string>
+    <string name="name_account_title">Name this account</string>
+    <string name="name_account_explanation">The name is shown on this phone only. Leave it empty to keep the suggested one.</string>
+    <string name="account_label">Account name</string>
+    <string name="save">Save</string>
+    <string name="label_not_saved">Could not save the name; the account is shown as %1$s.</string>
     <string name="already_enrolled">This phone already has that account.</string>
     <string name="add_account">Add an account</string>
     <string name="not_an_activation_link">That is not a Frict activation link.</string>
@@ -28,7 +32,7 @@
     <string name="no_requests">No sign-in requests</string>
     <string name="poll_failed">Could not check for sign-in requests: %1$s</string>
     <string name="sign_in_request">Sign-in request</string>
-    <string name="request_account">For %1$s on %2$s</string>
+    <string name="request_account">For %1$s</string>
     <string name="request_from">From: %1$s</string>
     <string name="request_field">%1$s: %2$s</string>
     <string name="approve">Approve</string>
@@ -47,11 +51,11 @@
     <string name="not_found">The server does not know this sign-in request.</string>
     <string name="answer_rejected">The server refused the answer (HTTP %1$d %2$s).</string>
     <string name="remove_account">Remove this account</string>
-    <string name="remove_account_title">Remove %1$s on %2$s?</string>
+    <string name="remove_account_title">Remove %1$s?</string>
     <string name="remove_account_explanation">Removes this phone from the account on its server, then deletes the account\'s keys here. This phone can\'t approve its sign-ins until enrolled again. Other accounts stay.</string>
     <string name="remove">Remove</string>
     <string name="cancel">Cancel</string>
-    <string name="removed">Removed %1$s on %2$s.</string>
+    <string name="removed">Removed %1$s.</string>
     <string name="not_removed_here">Removed on the server, but could not remove the account from this phone. Try again.</string>
     <string name="server_not_told_title">The server could not be told</string>
     <string name="server_not_told">Could not remove this phone on the server: %1$s. Remove anyway deletes the account and its keys from this phone only; the server keeps its enrollment.</string>

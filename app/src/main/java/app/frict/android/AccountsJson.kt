@@ -12,6 +12,7 @@ fun accountsToJson(accounts: List<Account>): String = JSONArray(
             .put("unlock_mode", it.unlockMode.name)
             .put("device_key_alias", it.keys.device)
             .put("approval_key_alias", it.keys.approval)
+            .putOpt("label", it.label)
     },
 ).toString()
 
@@ -23,6 +24,7 @@ fun accountsFromJson(json: String): List<Account> = JSONArray(json).let { a ->
             userId = o.getString("user_id"),
             unlockMode = UnlockMode.valueOf(o.getString("unlock_mode")),
             keys = KeyAliases(o.getString("device_key_alias"), o.getString("approval_key_alias")),
+            label = if (o.has("label")) o.getString("label") else null,
         )
     }
 }

@@ -82,6 +82,10 @@ class MainActivity : ComponentActivity() {
     /** An enrollment was answered with 426. */
     private var enrollUpdateRequired by mutableStateOf(false)
 
+    /** The account just enrolled, saved with its default label, while the person enrolling names it. */
+    private var naming by mutableStateOf<Account?>(null)
+    private var labelDraft by mutableStateOf("")
+
     // The check is for FragmentActivity, whose versions before fragment 1.3.0 lose results;
     // this is a ComponentActivity, and fragment 1.1.0 is on the classpath only through Firebase.
     @SuppressLint("InvalidFragmentVersionForActivityResult")
@@ -114,14 +118,19 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
                     val scroll = rememberScrollState()
-                    val form = accounts.isEmpty() || adding
+                    val form = accounts.isEmpty() || adding || naming != null
                     Column(
                         if (form) Modifier.padding(24.dp) else Modifier.verticalScroll(scroll).padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
                         if (enrollUpdateRequired || accounts.any { it.updateRequired }) UpdatePrompt()
-                        if (form) EnrollForm() else AccountList()
+                        val named = naming
+                        when {
+                            named != null -> NameForm(named)
+                            form -> EnrollForm()
+                            else -> AccountList()
+                        }
                     }
                 }
             }
@@ -249,6 +258,34 @@ class MainActivity : ComponentActivity() {
         status?.let { Text(it) }
     }
 
+    @Composable
+    private fun NameForm(account: Account) {
+        Text(stringResource(R.string.name_account_title), style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(R.string.name_account_explanation))
+        OutlinedTextField(
+            value = labelDraft,
+            onValueChange = { labelDraft = capLabel(it) },
+            label = { Text(stringResource(R.string.account_label)) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Button(onClick = { name(account) }, enabled = !busy) { Text(stringResource(R.string.save)) }
+    }
+
+    private fun name(account: Account) {
+        busy = true
+        val edited = labelDraft
+        accountThread.execute {
+            val named = nameAccount(account, edited, store)
+            runOnUiThread {
+                busy = false
+                naming = null
+                enrolled(named ?: account)
+                if (named == null) status = getString(R.string.label_not_saved, account.name)
+            }
+        }
+    }
+
     private fun stopAdding() {
         adding = false
         link = ""
@@ -323,7 +360,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun AccountSection(ui: AccountUi) {
         val account = ui.account
-        Text(stringResource(R.string.enrolled, account.userId, account.host))
+        Text(account.name, style = MaterialTheme.typography.titleMedium)
         Text(stringResource(R.string.unlocks_with, stringResource(account.unlockMode.label)))
         val lost = ui.keyLost
         if (lost != null) {
@@ -341,7 +378,7 @@ class MainActivity : ComponentActivity() {
     private fun RemoveDialog(ui: AccountUi) {
         AlertDialog(
             onDismissRequest = { confirmingRemove = null },
-            title = { Text(stringResource(R.string.remove_account_title, ui.account.userId, ui.account.host)) },
+            title = { Text(stringResource(R.string.remove_account_title, ui.account.name)) },
             text = { Text(stringResource(R.string.remove_account_explanation)) },
             confirmButton = { TextButton(onClick = { remove(ui) }) { Text(stringResource(R.string.remove)) } },
             dismissButton = { TextButton(onClick = { confirmingRemove = null }) { Text(stringResource(R.string.cancel)) } },
@@ -394,13 +431,13 @@ class MainActivity : ComponentActivity() {
         accounts.remove(ui)
         shownIds.remove(ui.account)
         link = ""
-        status = getString(R.string.removed, ui.account.userId, ui.account.host)
+        status = getString(R.string.removed, ui.account.name)
     }
 
     @Composable
     private fun ChallengeCard(ui: AccountUi, c: Challenge) {
         Text(stringResource(R.string.sign_in_request), style = MaterialTheme.typography.titleLarge)
-        Text(stringResource(R.string.request_account, c.accountName(ui.account), ui.account.host))
+        Text(stringResource(R.string.request_account, ui.account.name))
         if (c.ipaddr.isNotEmpty()) Text(stringResource(R.string.request_from, c.ipaddr))
         c.pushinfo.forEach { (key, value) -> Text(stringResource(R.string.request_field, key, value)) }
         if (c.type.isNotEmpty()) Text(c.type)
@@ -477,7 +514,7 @@ class MainActivity : ComponentActivity() {
         }
         val prompt = BiometricPrompt.Builder(this)
             .setTitle(getString(title))
-            .setSubtitle(getString(R.string.request_account, c.accountName(account), account.host))
+            .setSubtitle(getString(R.string.request_account, account.name))
             .setAllowedAuthenticators(mode.promptAuthenticators)
         if (mode.promptHasBackButton) prompt.setNegativeButton(getString(R.string.back), mainExecutor) { _, _ -> busy = false }
         prompt.build()
@@ -557,7 +594,10 @@ class MainActivity : ComponentActivity() {
                 busy = false
                 if (result != UpdateRequired) enrollUpdateRequired = false
                 when (result) {
-                    is EnrollResult.Enrolled -> enrolled(result.account)
+                    is EnrollResult.Enrolled -> {
+                        naming = result.account
+                        labelDraft = result.account.name
+                    }
                     UpdateRequired -> enrollUpdateRequired = true
                     else -> status = describe(result)
                 }
@@ -575,7 +615,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun describe(result: EnrollResult): String = when (result) {
-        is EnrollResult.Enrolled -> getString(R.string.enrolled, result.account.userId, result.account.host)
+        is EnrollResult.Enrolled -> result.account.name
         EnrollResult.AlreadyEnrolled -> getString(R.string.already_enrolled)
         EnrollResult.NotAnActivationLink -> getString(R.string.not_an_activation_link)
         is EnrollResult.KeysUnavailable -> getString(R.string.keys_unavailable, result.message)

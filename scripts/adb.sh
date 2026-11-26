@@ -139,8 +139,8 @@ enter_pin_until_gone() {
   return 1
 }
 
-# disable_soft_keyboards: the e2e never types, and a soft keyboard covers what
-# it taps. Android keeps an input method enabled, falling back to the next one
+# disable_soft_keyboards: the e2e types with key events, and a soft keyboard
+# covers what it taps. Android keeps an input method enabled, falling back to the next one
 # when the last is disabled, so this disables their packages until none is left.
 disable_soft_keyboards() {
   local i id ids

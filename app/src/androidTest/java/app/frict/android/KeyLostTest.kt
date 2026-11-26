@@ -32,7 +32,7 @@ class KeyLostTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val store = PrefsAccountStore(context)
     private val lost = Account(UNREACHABLE, "DUABCDEFGHIJKLMNOPQRSTUVWXYZ", UnlockMode.FINGERPRINT_OR_SCREEN_LOCK, KeyAliases("device_key.lost", "approval_key.lost"))
-    private val healthy = Account(UNREACHABLE, "DU234567234567234567234567AB", UnlockMode.FINGERPRINT_OR_SCREEN_LOCK, KeyAliases("device_key.ok", "approval_key.ok"))
+    private val healthy = Account(UNREACHABLE, "DU234567234567234567234567AB", UnlockMode.FINGERPRINT_OR_SCREEN_LOCK, KeyAliases("device_key.ok", "approval_key.ok"), "Work admin")
 
     @Before
     fun enrolled() {
@@ -67,12 +67,12 @@ class KeyLostTest {
             compose.onNodeWithText(text(R.string.approval_key_lost_fingerprint_or_screen_lock)).assertExists()
             compose.onNodeWithText(text(R.string.no_requests)).assertExists()
             compose.onAllNodesWithText(text(R.string.remove_account))[0].performClick()
-            compose.onNodeWithText(text(R.string.remove_account_title, lost.userId, lost.host)).assertExists()
+            compose.onNodeWithText(text(R.string.remove_account_title, lost.name)).assertExists()
             compose.onNodeWithText(text(R.string.remove)).performClick()
             waitFor(text(R.string.server_not_told_title))
             compose.onNodeWithText(text(R.string.remove_anyway)).performClick()
-            waitFor(text(R.string.removed, lost.userId, lost.host))
-            compose.onNodeWithText(text(R.string.enrolled, healthy.userId, healthy.host)).assertExists()
+            waitFor(text(R.string.removed, lost.name))
+            compose.onNodeWithText("Work admin").assertExists()
             compose.onNodeWithText(text(R.string.key_lost_title)).assertDoesNotExist()
         }
         assertEquals(listOf(healthy), store.load())
