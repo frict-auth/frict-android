@@ -25,6 +25,7 @@ android {
         versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "PRIVACY_POLICY_URL", "\"https://privacy.frict.app/\"")
     }
 
     signingConfigs {

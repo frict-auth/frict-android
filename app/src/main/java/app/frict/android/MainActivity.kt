@@ -131,6 +131,7 @@ class MainActivity : ComponentActivity() {
                             form -> EnrollForm()
                             else -> AccountList()
                         }
+                        TextButton(onClick = ::openPrivacyPolicy) { Text(stringResource(R.string.privacy_policy)) }
                     }
                 }
             }
@@ -186,6 +187,14 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(Intent.ACTION_VIEW, listing))
         } catch (_: ActivityNotFoundException) {
             status = getString(R.string.no_play_store)
+        }
+    }
+
+    private fun openPrivacyPolicy() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, BuildConfig.PRIVACY_POLICY_URL.toUri()))
+        } catch (_: ActivityNotFoundException) {
+            status = getString(R.string.no_browser, BuildConfig.PRIVACY_POLICY_URL)
         }
     }
 
