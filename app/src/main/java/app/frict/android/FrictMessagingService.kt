@@ -24,8 +24,9 @@ const val EXTRA_CHALLENGE_ID = "app.frict.android.CHALLENGE_ID"
 
 /**
  * Wakes the app for a login push: a visible notification for each, which FCM expects of a
- * high-priority message. The notification says only that something happened; the app
- * fetches what with signed requests once opened.
+ * high-priority message. A push names only a challenge ID, so the notification names the
+ * account whose server returns that challenge to it ([findOwner]); a challenge no account
+ * owns is dropped.
  *
  * With firebase_messaging_installation_id_enabled, FCM calls onRegistered, never onNewToken.
  */
@@ -34,19 +35,23 @@ class FrictMessagingService : FirebaseMessagingService() {
     override fun onRegistered(installationId: String) = sendFid(applicationContext, installationId)
 
     override fun onMessageReceived(message: RemoteMessage) {
-        if (PrefsAccountStore(applicationContext).load() == null) {
-            Log.i(TAG, "ignored a push: not enrolled")
-            return
-        }
         val id = parsePush(message.data)
         if (id == null) {
             Log.w(TAG, "ignored a push with data keys ${message.data.keys}")
             return
         }
-        notify(id)
+        val owned = accountThread.submit<OwnedChallenge?> {
+            findOwner(id, PrefsAccountStore(applicationContext).load(), ::approvals)
+        }.get()
+        if (owned == null) {
+            Log.i(TAG, "ignored a push: no account's server has its challenge")
+            return
+        }
+        notify(owned)
     }
 
-    private fun notify(challengeId: String) {
+    private fun notify(owned: OwnedChallenge) {
+        val challengeId = owned.challenge.id
         val notifications = getSystemService(NotificationManager::class.java)
         notifications.createNotificationChannel(NotificationChannel(LOGIN_CHANNEL, getString(R.string.channel_logins), NotificationManager.IMPORTANCE_HIGH))
         val open = Intent(this, MainActivity::class.java)
@@ -55,7 +60,7 @@ class FrictMessagingService : FirebaseMessagingService() {
         val notification = Notification.Builder(this, LOGIN_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.notify_login))
-            .setContentText(getString(R.string.notify_open))
+            .setContentText(getString(R.string.request_account, owned.challenge.accountName(owned.account), owned.account.host))
             .setCategory(Notification.CATEGORY_STATUS)
             .setAutoCancel(true)
             .setContentIntent(PendingIntent.getActivity(this, challengeId.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
@@ -74,7 +79,7 @@ fun deleteRetiredChannels(context: Context) =
 /** A build without a Firebase project (release, until it has one) runs poll-only. */
 private fun hasFirebase(context: Context) = FirebaseApp.getApps(context).isNotEmpty()
 
-/** On every start: registers with FCM and sends this installation's FID to the server. */
+/** On every start: registers with FCM and sends this installation's FID to every account's server. */
 fun startPush(context: Context) {
     if (!hasFirebase(context)) {
         Log.i(TAG, "no Firebase project in this build: poll only")
@@ -97,14 +102,23 @@ fun currentFid(context: Context): String? {
     }
 }
 
-/** Sends [fid] to the server if this device is enrolled. */
+/** Sends [fid] to every account's server. */
 fun sendFid(context: Context, fid: String) = accountThread.execute {
-    val account = PrefsAccountStore(context).load() ?: return@execute
-    val result = try {
-        approvals(account).sendFid(fid)
-    } catch (e: Exception) {
-        Log.w(TAG, "FID not sent", e)
-        return@execute
+    sendFidToAll(fid, PrefsAccountStore(context).load(), ::approvals).forEach { (account, result) ->
+        Log.i(TAG, "FID update for ${account.userId} on ${account.host}: $result")
     }
-    Log.i(TAG, "FID update: $result")
+}
+
+/**
+ * Deletes this installation's FID, here and at Firebase, once no account is left to push
+ * to. Blocks; not on the main thread.
+ */
+fun deleteInstallation(context: Context) {
+    if (!hasFirebase(context)) return
+    try {
+        Tasks.await(FirebaseInstallations.getInstance().delete(), FID_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        Log.i(TAG, "Firebase installation deleted")
+    } catch (e: Exception) {
+        Log.w(TAG, "Firebase installation not deleted", e)
+    }
 }

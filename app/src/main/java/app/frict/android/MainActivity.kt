@@ -27,6 +27,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -37,6 +38,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -45,28 +47,40 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+
+/** One account on screen. */
+private class AccountUi(val account: Account) {
+    var challenge by mutableStateOf<Challenge?>(null)
+    var status by mutableStateOf<String?>(null)
+    var pollError by mutableStateOf<String?>(null)
+
+    /** Set once Keystore lost one of this account's keys: the only way on is removing the account. */
+    var keyLost by mutableStateOf<LostKey?>(null)
+
+    /** This account's server answered a request with 426. */
+    var updateRequired by mutableStateOf(false)
+}
 
 class MainActivity : ComponentActivity() {
     private var link by mutableStateOf("")
     private var unlockMode by mutableStateOf(UnlockMode.FINGERPRINT_OR_SCREEN_LOCK)
-    private var account by mutableStateOf<Account?>(null)
+    private val accounts = mutableStateListOf<AccountUi>()
+
+    /** Showing the enrollment form while there are accounts. */
+    private var adding by mutableStateOf(false)
     private var status by mutableStateOf<String?>(null)
     private var busy by mutableStateOf(false)
-    private var challenge by mutableStateOf<Challenge?>(null)
-    private var pollError by mutableStateOf<String?>(null)
-    private var confirmingRemove by mutableStateOf(false)
+    private var confirmingRemove by mutableStateOf<AccountUi?>(null)
 
-    /** Why the server could not be told of a removal, while offering to remove anyway. */
-    private var serverNotTold by mutableStateOf<String?>(null)
+    /** An account the server could not be told to remove, and why, while offering to remove it anyway. */
+    private var serverNotTold by mutableStateOf<Pair<AccountUi, String>?>(null)
     private var scanning by mutableStateOf(false)
 
-    /** Set once Keystore lost a key: the only way on is removing this phone. */
-    private var keyLost by mutableStateOf<LostKey?>(null)
-
-    /** The server answered a request with 426: this version must be updated. */
-    private var updateRequired by mutableStateOf(false)
+    /** An enrollment was answered with 426. */
+    private var enrollUpdateRequired by mutableStateOf(false)
 
     // The check is for FragmentActivity, whose versions before fragment 1.3.0 lose results;
     // this is a ComponentActivity, and fragment 1.1.0 is on the classpath only through Firebase.
@@ -75,34 +89,39 @@ class MainActivity : ComponentActivity() {
         if (granted) scanning = true else status = getString(R.string.camera_refused)
     }
 
-    /** [challenge]'s ID, for the account thread. */
-    @Volatile
-    private var shownId: String? = null
+    /** The ID of the challenge on screen for each account, for the account thread. */
+    private val shownIds = ConcurrentHashMap<Account, String>()
 
     /** Bumped on every resume and pause; a poll loop runs while its generation is current. */
     private val pollGeneration = AtomicInteger()
+
+    /** The generation whose poll loop is running, if any; only the account thread touches it. */
+    private var pollingGeneration: Int? = null
+    private var resumed = false
+
+    private val store get() = PrefsAccountStore(applicationContext)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         takeLink(intent)
         takeChallenge(intent)
         accountThread.execute {
-            val saved = PrefsAccountStore(applicationContext).load()
-            runOnUiThread { enrolled(saved) }
+            val saved = store.load()
+            runOnUiThread { loaded(saved) }
         }
-        startPush(applicationContext)
         deleteRetiredChannels(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
                     val scroll = rememberScrollState()
+                    val form = accounts.isEmpty() || adding
                     Column(
-                        if (account == null) Modifier.padding(24.dp) else Modifier.verticalScroll(scroll).padding(24.dp),
+                        if (form) Modifier.padding(24.dp) else Modifier.verticalScroll(scroll).padding(24.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        if (updateRequired) UpdatePrompt()
-                        account?.let { Enrolled(it) } ?: EnrollForm()
+                        if (enrollUpdateRequired || accounts.any { it.updateRequired }) UpdatePrompt()
+                        if (form) EnrollForm() else AccountList()
                     }
                 }
             }
@@ -111,27 +130,39 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        val generation = pollGeneration.incrementAndGet()
-        accountThread.execute { checkApprovalKey() }
-        accountThread.execute { poll(generation) }
+        resumed = true
+        pollGeneration.incrementAndGet()
+        accountThread.execute { checkApprovalKeys() }
+        startPolling()
     }
 
-    /** On the account thread: whether Keystore still holds a usable approval_key. */
-    private fun checkApprovalKey() {
-        if (PrefsAccountStore(applicationContext).load() == null) return
-        val lost = try {
-            lostApprovalKey()
-        } catch (e: Exception) {
-            Log.w(TAG, "could not check the approval key", e)
-            null
+    /** Starts the poll loop of the current generation unless it is running. */
+    private fun startPolling() = accountThread.execute {
+        val generation = pollGeneration.get()
+        if (pollingGeneration == generation) return@execute
+        pollingGeneration = generation
+        poll(generation)
+    }
+
+    /** On the account thread: whether Keystore still holds a usable approval_key for each account. */
+    private fun checkApprovalKeys() {
+        for (account in store.load()) {
+            val lost = try {
+                lostApprovalKey(account.keys.approval)
+            } catch (e: Exception) {
+                Log.w(TAG, "could not check the approval key of ${account.userId}", e)
+                null
+            }
+            lost?.let { runOnUiThread { lose(account, it) } }
         }
-        lost?.let { runOnUiThread { lose(it) } }
     }
 
-    private fun lose(key: LostKey) {
-        if (account == null) return
-        keyLost = maxOf(key, keyLost ?: key)
-        show(null)
+    private fun ui(account: Account) = accounts.find { it.account == account }
+
+    private fun lose(account: Account, key: LostKey) {
+        val ui = ui(account) ?: return
+        ui.keyLost = maxOf(key, ui.keyLost ?: key)
+        show(ui, null)
     }
 
     @Composable
@@ -150,6 +181,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        resumed = false
         pollGeneration.incrementAndGet()
         super.onPause()
     }
@@ -161,30 +193,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun takeLink(intent: Intent?) {
-        if (intent?.action == Intent.ACTION_VIEW) intent.dataString?.let { link = it }
+        if (intent?.action != Intent.ACTION_VIEW) return
+        intent.dataString?.let {
+            link = it
+            adding = true
+        }
     }
 
-    /** A login notification's challenge: fetched from the server and shown. */
+    /** A login notification's challenge: shown on the account whose server has it. */
     private fun takeChallenge(intent: Intent?) {
         val id = intent?.getStringExtra(EXTRA_CHALLENGE_ID) ?: return
         intent.removeExtra(EXTRA_CHALLENGE_ID)
         accountThread.execute {
-            val update = PrefsAccountStore(applicationContext).load()?.let { approvals(it).open(id) }
-            update?.let { runOnUiThread { apply(it) } }
+            val owned = findOwner(id, store.load(), ::approvals) ?: return@execute
+            runOnUiThread { apply(owned.account, PollUpdate.Show(owned.challenge)) }
         }
     }
 
+    private fun loaded(saved: List<Account>) {
+        accounts.clear()
+        accounts.addAll(saved.map(::AccountUi))
+        if (saved.isNotEmpty()) pushToAccounts()
+    }
+
     /** Pushes are shown as notifications, so ask for them once there is an account to push to. */
-    private fun enrolled(saved: Account?) {
-        account = saved
-        if (saved != null && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+    private fun pushToAccounts() {
+        startPush(applicationContext)
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 0)
         }
     }
 
     @Composable
     private fun EnrollForm() {
-        Text(stringResource(R.string.not_enrolled))
+        Text(stringResource(if (accounts.isEmpty()) R.string.not_enrolled else R.string.add_account))
         if (scanning) {
             Scanner()
             return
@@ -200,10 +242,17 @@ class MainActivity : ComponentActivity() {
             Text(stringResource(R.string.unlock_with_title), style = MaterialTheme.typography.titleMedium)
             UnlockMode.entries.forEach { UnlockChoice(it) }
         }
-        Button(onClick = ::enroll, enabled = !busy && link.isNotBlank()) {
-            Text(stringResource(R.string.enroll))
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            if (accounts.isNotEmpty()) OutlinedButton(onClick = ::stopAdding, enabled = !busy) { Text(stringResource(R.string.cancel)) }
+            Button(onClick = ::enroll, enabled = !busy && link.isNotBlank()) { Text(stringResource(R.string.enroll)) }
         }
         status?.let { Text(it) }
+    }
+
+    private fun stopAdding() {
+        adding = false
+        link = ""
+        status = null
     }
 
     @Composable
@@ -254,149 +303,173 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun Enrolled(account: Account) {
-        Text(stringResource(R.string.enrolled, account.userId, account.host))
-        Text(stringResource(R.string.unlocks_with, stringResource(account.unlockMode.label)))
-        val lost = keyLost
-        if (lost != null) {
-            Text(stringResource(R.string.key_lost_title), style = MaterialTheme.typography.titleLarge)
-            Text(stringResource(lost.explanation(account.unlockMode)))
-        } else {
-            challenge?.let { ChallengeCard(it) } ?: Text(stringResource(R.string.no_requests))
+    private fun AccountList() {
+        for (ui in accounts) {
+            val c = ui.challenge ?: continue
+            if (ui.keyLost != null) continue
+            ChallengeCard(ui, c)
+            HorizontalDivider()
+        }
+        accounts.forEach {
+            AccountSection(it)
+            HorizontalDivider()
         }
         status?.let { Text(it) }
-        if (lost == null) pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
-        OutlinedButton(onClick = { confirmingRemove = true }, enabled = !busy) { Text(stringResource(R.string.remove_phone)) }
-        if (confirmingRemove) RemoveDialog()
-        serverNotTold?.let { RemoveAnywayDialog(it) }
+        OutlinedButton(onClick = { adding = true }, enabled = !busy) { Text(stringResource(R.string.add_account)) }
+        confirmingRemove?.let { RemoveDialog(it) }
+        serverNotTold?.let { (ui, reason) -> RemoveAnywayDialog(ui, reason) }
     }
 
     @Composable
-    private fun RemoveDialog() {
+    private fun AccountSection(ui: AccountUi) {
+        val account = ui.account
+        Text(stringResource(R.string.enrolled, account.userId, account.host))
+        Text(stringResource(R.string.unlocks_with, stringResource(account.unlockMode.label)))
+        val lost = ui.keyLost
+        if (lost != null) {
+            Text(stringResource(R.string.key_lost_title), style = MaterialTheme.typography.titleLarge)
+            Text(stringResource(lost.explanation(account.unlockMode)))
+        } else if (ui.challenge == null) {
+            Text(stringResource(R.string.no_requests))
+        }
+        ui.status?.let { Text(it) }
+        if (lost == null) ui.pollError?.let { Text(stringResource(R.string.poll_failed, it)) }
+        OutlinedButton(onClick = { confirmingRemove = ui }, enabled = !busy) { Text(stringResource(R.string.remove_account)) }
+    }
+
+    @Composable
+    private fun RemoveDialog(ui: AccountUi) {
         AlertDialog(
-            onDismissRequest = { confirmingRemove = false },
-            title = { Text(stringResource(R.string.remove_phone_title)) },
-            text = { Text(stringResource(R.string.remove_phone_explanation)) },
-            confirmButton = { TextButton(onClick = ::remove) { Text(stringResource(R.string.remove)) } },
-            dismissButton = { TextButton(onClick = { confirmingRemove = false }) { Text(stringResource(R.string.cancel)) } },
+            onDismissRequest = { confirmingRemove = null },
+            title = { Text(stringResource(R.string.remove_account_title, ui.account.userId, ui.account.host)) },
+            text = { Text(stringResource(R.string.remove_account_explanation)) },
+            confirmButton = { TextButton(onClick = { remove(ui) }) { Text(stringResource(R.string.remove)) } },
+            dismissButton = { TextButton(onClick = { confirmingRemove = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
     @Composable
-    private fun RemoveAnywayDialog(reason: String) {
+    private fun RemoveAnywayDialog(ui: AccountUi, reason: String) {
         AlertDialog(
             onDismissRequest = { serverNotTold = null },
             title = { Text(stringResource(R.string.server_not_told_title)) },
             text = { Text(stringResource(R.string.server_not_told, reason)) },
-            confirmButton = { TextButton(onClick = ::removeAnyway) { Text(stringResource(R.string.remove_anyway)) } },
+            confirmButton = { TextButton(onClick = { removeAnyway(ui) }) { Text(stringResource(R.string.remove_anyway)) } },
             dismissButton = { TextButton(onClick = { serverNotTold = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
-    private fun remove() {
-        confirmingRemove = false
-        val current = account ?: return
+    private fun remove(ui: AccountUi) {
+        confirmingRemove = null
         busy = true
         status = null
+        val account = ui.account
         accountThread.execute {
-            val result = removePhone({ approvals(current).remove() }, PrefsAccountStore(applicationContext), ::deleteKeys)
+            val result = removeAccount(account, { approvals(account).remove() }, store, ::deleteKeys) { deleteInstallation(applicationContext) }
             runOnUiThread {
                 busy = false
                 when (result) {
-                    RemoveResult.Removed -> showRemoved()
-                    RemoveResult.NotRemovedHere -> status = getString(R.string.not_removed_here)
-                    is RemoveResult.ServerNotTold -> serverNotTold = result.reason
-                    UpdateRequired -> updateRequired = true
+                    RemoveResult.Removed -> removed(ui)
+                    RemoveResult.NotRemovedHere -> ui.status = getString(R.string.not_removed_here)
+                    is RemoveResult.ServerNotTold -> serverNotTold = ui to result.reason
+                    UpdateRequired -> ui.updateRequired = true
                 }
             }
         }
     }
 
-    private fun removeAnyway() {
+    private fun removeAnyway(ui: AccountUi) {
         serverNotTold = null
         busy = true
         accountThread.execute {
-            val removed = unenroll(PrefsAccountStore(applicationContext), ::deleteKeys)
+            val removed = unenroll(ui.account, store, ::deleteKeys) { deleteInstallation(applicationContext) }
             runOnUiThread {
                 busy = false
-                if (removed) showRemoved() else status = getString(R.string.not_removed)
+                if (removed) removed(ui) else ui.status = getString(R.string.not_removed)
             }
         }
     }
 
-    private fun showRemoved() {
-        account = null
-        keyLost = null
-        show(null)
-        pollError = null
+    private fun removed(ui: AccountUi) {
+        accounts.remove(ui)
+        shownIds.remove(ui.account)
         link = ""
-        status = getString(R.string.removed)
+        status = getString(R.string.removed, ui.account.userId, ui.account.host)
     }
 
     @Composable
-    private fun ChallengeCard(c: Challenge) {
+    private fun ChallengeCard(ui: AccountUi, c: Challenge) {
         Text(stringResource(R.string.sign_in_request), style = MaterialTheme.typography.titleLarge)
-        if (c.username.isNotEmpty()) Text(stringResource(R.string.request_user, c.username))
+        Text(stringResource(R.string.request_account, c.accountName(ui.account), ui.account.host))
         if (c.ipaddr.isNotEmpty()) Text(stringResource(R.string.request_from, c.ipaddr))
         c.pushinfo.forEach { (key, value) -> Text(stringResource(R.string.request_field, key, value)) }
         if (c.type.isNotEmpty()) Text(c.type)
-        Button(onClick = { confirm(c, Answer.APPROVE) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+        Button(onClick = { confirm(ui, c, Answer.APPROVE) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.approve))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            OutlinedButton(onClick = { confirm(c, Answer.DENY) }, enabled = !busy) { Text(stringResource(R.string.deny)) }
-            OutlinedButton(onClick = { confirm(c, Answer.NOT_ME) }, enabled = !busy) { Text(stringResource(R.string.not_me)) }
+            OutlinedButton(onClick = { confirm(ui, c, Answer.DENY) }, enabled = !busy) { Text(stringResource(R.string.deny)) }
+            OutlinedButton(onClick = { confirm(ui, c, Answer.NOT_ME) }, enabled = !busy) { Text(stringResource(R.string.not_me)) }
         }
     }
 
-    private fun show(c: Challenge?) {
-        challenge = c
-        shownId = c?.id
+    private fun show(ui: AccountUi, c: Challenge?) {
+        ui.challenge = c
+        if (c == null) shownIds.remove(ui.account) else shownIds[ui.account] = c.id
     }
 
-    /** On the account thread: one poll, then the next after the server's interval. */
+    /**
+     * On the account thread: one poll of every account, then the next after the shortest
+     * interval a server set. With no account the loop stops; enrolling starts it again.
+     */
     private fun poll(generation: Int) {
         if (generation != pollGeneration.get()) return
-        val result = PrefsAccountStore(applicationContext).load()?.let { approvals(it).poll(shownId) }
-        result?.let {
-            runOnUiThread { apply(it.update) }
+        val saved = store.load()
+        if (saved.isEmpty()) {
+            pollingGeneration = null
+            return
         }
-        accountThread.schedule({ poll(generation) }, result?.nextSeconds ?: DEFAULT_POLL_SECONDS, TimeUnit.SECONDS)
+        val polls = pollAll(saved, shownIds, ::approvals)
+        runOnUiThread { polls.forEach { (account, poll) -> apply(account, poll.update) } }
+        val next = polls.minOf { it.second.nextSeconds }
+        accountThread.schedule({ poll(generation) }, next, TimeUnit.SECONDS)
     }
 
-    private fun apply(update: PollUpdate) {
-        if (update !is PollUpdate.Failed) pollError = null
-        if (update != UpdateRequired && update !is PollUpdate.Failed) updateRequired = false
+    private fun apply(account: Account, update: PollUpdate) {
+        val ui = ui(account) ?: return
+        if (update !is PollUpdate.Failed) ui.pollError = null
+        if (update != UpdateRequired && update !is PollUpdate.Failed) ui.updateRequired = false
         when (update) {
-            is PollUpdate.Show -> if (challenge == null && keyLost == null) {
-                show(update.challenge)
-                status = null
+            is PollUpdate.Show -> if (ui.challenge == null && ui.keyLost == null) {
+                show(ui, update.challenge)
+                ui.status = null
             }
-            is PollUpdate.Withdrawn -> if (challenge?.id == update.id && !busy) {
-                show(null)
-                status = getString(R.string.request_withdrawn)
+            is PollUpdate.Withdrawn -> if (ui.challenge?.id == update.id && !busy) {
+                show(ui, null)
+                ui.status = getString(R.string.request_withdrawn)
             }
             PollUpdate.NoChange -> Unit
-            is PollUpdate.Failed -> pollError = update.message
-            is PollUpdate.KeyLost -> lose(update.key)
-            UpdateRequired -> updateRequired = true
+            is PollUpdate.Failed -> ui.pollError = update.message
+            is PollUpdate.KeyLost -> lose(account, update.key)
+            UpdateRequired -> ui.updateRequired = true
         }
     }
 
-    /** Asks for the account's unlock, bound to the approval_key, then sends [answer] signed with it. */
-    private fun confirm(c: Challenge, answer: Answer) {
-        val mode = account?.unlockMode ?: return
+    /** Asks for the account's unlock, bound to its approval_key, then sends [answer] signed with it. */
+    private fun confirm(ui: AccountUi, c: Challenge, answer: Answer) {
+        val account = ui.account
+        val mode = account.unlockMode
         val signature = try {
-            approvalSignature()
+            approvalSignature(account.keys.approval)
         } catch (e: KeyLostException) {
-            lose(e.key)
+            lose(account, e.key)
             return
         } catch (e: Exception) {
-            status = getString(R.string.approval_key_unavailable, e.message ?: e.javaClass.simpleName)
+            ui.status = getString(R.string.approval_key_unavailable, e.message ?: e.javaClass.simpleName)
             return
         }
         busy = true
-        status = null
+        ui.status = null
         val title = when (answer) {
             Answer.APPROVE -> R.string.confirm_approve
             Answer.DENY -> R.string.confirm_deny
@@ -404,7 +477,7 @@ class MainActivity : ComponentActivity() {
         }
         val prompt = BiometricPrompt.Builder(this)
             .setTitle(getString(title))
-            .setSubtitle(c.username)
+            .setSubtitle(getString(R.string.request_account, c.accountName(account), account.host))
             .setAllowedAuthenticators(mode.promptAuthenticators)
         if (mode.promptHasBackButton) prompt.setNegativeButton(getString(R.string.back), mainExecutor) { _, _ -> busy = false }
         prompt.build()
@@ -417,32 +490,31 @@ class MainActivity : ComponentActivity() {
                         val authenticated = result.cryptoObject?.signature
                         if (authenticated == null) {
                             busy = false
-                            status = getString(R.string.approval_key_unavailable, "no signature in the prompt's result")
+                            ui.status = getString(R.string.approval_key_unavailable, "no signature in the prompt's result")
                             return
                         }
-                        send(c, answer, authenticated.asSigner())
+                        send(ui, c, answer, authenticated.asSigner())
                     }
 
                     override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                         busy = false
-                        status = errString.toString()
+                        ui.status = errString.toString()
                     }
                 },
             )
     }
 
-    private fun send(c: Challenge, answer: Answer, approvalSigner: Signer) {
-        val current = account ?: return
+    private fun send(ui: AccountUi, c: Challenge, answer: Answer, approvalSigner: Signer) {
         accountThread.execute {
-            val result = approvals(current).answer(c.id, answer, approvalSigner)
+            val result = approvals(ui.account).answer(c.id, answer, approvalSigner)
             runOnUiThread {
                 busy = false
                 if (result == UpdateRequired) {
-                    updateRequired = true
+                    ui.updateRequired = true
                     return@runOnUiThread
                 }
-                if (challenge?.id == c.id) show(null)
-                status = describe(result)
+                if (ui.challenge?.id == c.id) show(ui, null)
+                ui.status = describe(result)
             }
         }
     }
@@ -473,7 +545,8 @@ class MainActivity : ComponentActivity() {
         val target = link
         val enroller = Enroller(
             keys = KeystoreKeyMaker(packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)),
-            store = PrefsAccountStore(applicationContext),
+            deleteKeys = ::deleteKeys,
+            store = store,
             api = { host -> DeviceApi("https://$host") },
             fid = { currentFid(applicationContext) ?: NO_FID },
             unixSeconds = { System.currentTimeMillis() / 1000 },
@@ -482,13 +555,23 @@ class MainActivity : ComponentActivity() {
             val result = enroller.enroll(target, mode)
             runOnUiThread {
                 busy = false
+                if (result != UpdateRequired) enrollUpdateRequired = false
                 when (result) {
                     is EnrollResult.Enrolled -> enrolled(result.account)
-                    UpdateRequired -> updateRequired = true
+                    UpdateRequired -> enrollUpdateRequired = true
                     else -> status = describe(result)
                 }
             }
         }
+    }
+
+    private fun enrolled(account: Account) {
+        adding = false
+        link = ""
+        status = null
+        accounts.add(AccountUi(account))
+        pushToAccounts()
+        if (resumed) startPolling()
     }
 
     private fun describe(result: EnrollResult): String = when (result) {

@@ -5,6 +5,7 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URLDecoder
 import java.util.Base64
+import java.util.UUID
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -61,26 +62,41 @@ fun enrollBody(code: String, keys: EnrollmentKeys, fid: String): ByteArray = JSO
 
 private fun b64url(der: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(der)
 
-/** The enrolled user, the API host that enrolled it, and what unlocks its approval_key. */
-data class Account(val host: String, val userId: String, val unlockMode: UnlockMode)
+/** Where one account's two keys live in Keystore. */
+data class KeyAliases(val device: String, val approval: String) {
+    companion object {
+        /** The aliases of the one account app versions before several accounts had. */
+        val LEGACY = KeyAliases("device_key", "approval_key")
 
+        fun random(): KeyAliases = UUID.randomUUID().toString().let { KeyAliases("device_key.$it", "approval_key.$it") }
+    }
+}
+
+/** One enrolled user: the API host that enrolled it, what unlocks its approval_key, and where its keys are. */
+data class Account(val host: String, val userId: String, val unlockMode: UnlockMode, val keys: KeyAliases) {
+    fun isFor(host: String, userId: String) = this.host.equals(host, ignoreCase = true) && this.userId == userId
+}
+
+/** The accounts on this phone, in the order they were enrolled. */
 interface AccountStore {
-    fun load(): Account?
+    fun load(): List<Account>
 
     /** Returns false if the account could not be saved. */
-    fun save(account: Account): Boolean
+    fun add(account: Account): Boolean
 
     /** Returns false if the account could not be removed. */
-    fun clear(): Boolean
+    fun remove(account: Account): Boolean
 }
 
 /**
- * Removes this phone's enrollment from this phone only: the saved account, then both keys.
- * Returns false, keeping the keys, if the account could not be removed.
+ * Removes [account] from this phone only: the saved account, then its keys, then, once no
+ * account is left, this app's Firebase installation. Returns false, keeping the keys, if
+ * the account could not be removed.
  */
-fun unenroll(store: AccountStore, deleteKeys: () -> Unit): Boolean {
-    if (!store.clear()) return false
-    deleteKeys()
+fun unenroll(account: Account, store: AccountStore, deleteKeys: (KeyAliases) -> Unit, deleteInstallation: () -> Unit): Boolean {
+    if (!store.remove(account)) return false
+    deleteKeys(account.keys)
+    if (store.load().isEmpty()) deleteInstallation()
     return true
 }
 
@@ -94,17 +110,24 @@ sealed interface RemoveResult {
     data class ServerNotTold(val reason: String) : RemoveResult
 }
 
-/** Removes the enrollment from the server, then, once the server no longer holds it, from this phone. */
-fun removePhone(tellServer: () -> ServerRemoval, store: AccountStore, deleteKeys: () -> Unit): RemoveResult =
-    when (val told = tellServer()) {
-        is ServerRemoval.NotTold -> RemoveResult.ServerNotTold(told.reason)
-        UpdateRequired -> UpdateRequired
-        ServerRemoval.Removed, ServerRemoval.AlreadyGone ->
-            if (unenroll(store, deleteKeys)) RemoveResult.Removed else RemoveResult.NotRemovedHere
-    }
+/** Removes [account] from its server, then, once the server no longer holds it, from this phone. */
+fun removeAccount(
+    account: Account,
+    tellServer: () -> ServerRemoval,
+    store: AccountStore,
+    deleteKeys: (KeyAliases) -> Unit,
+    deleteInstallation: () -> Unit,
+): RemoveResult = when (val told = tellServer()) {
+    is ServerRemoval.NotTold -> RemoveResult.ServerNotTold(told.reason)
+    UpdateRequired -> UpdateRequired
+    ServerRemoval.Removed, ServerRemoval.AlreadyGone ->
+        if (unenroll(account, store, deleteKeys, deleteInstallation)) RemoveResult.Removed else RemoveResult.NotRemovedHere
+}
 
 sealed interface EnrollResult {
     data class Enrolled(val account: Account) : EnrollResult
+
+    /** This phone already holds an account for the link's user on the link's host. */
     data object AlreadyEnrolled : EnrollResult
     data object NotAnActivationLink : EnrollResult
     data class KeysUnavailable(val message: String) : EnrollResult
@@ -114,22 +137,32 @@ sealed interface EnrollResult {
 }
 
 /**
- * Claims an activation for this device: new keys, a signed enroll request, and the
- * activation's user saved once the server accepts. Blocks; not thread-safe, so run it on
- * one background thread.
+ * Claims an activation for this device as a new account: new keys under new aliases, a
+ * signed enroll request, and the account saved once the server accepts. The keys are
+ * deleted again if it is not saved. Blocks; not thread-safe, so run it on one background
+ * thread.
  */
 class Enroller(
     private val keys: KeyMaker,
+    private val deleteKeys: (KeyAliases) -> Unit,
     private val store: AccountStore,
     private val api: (host: String) -> DeviceApi,
     private val fid: () -> String,
     private val unixSeconds: () -> Long,
+    private val newAliases: () -> KeyAliases = KeyAliases::random,
 ) {
     fun enroll(link: String, mode: UnlockMode): EnrollResult {
-        if (store.load() != null) return EnrollResult.AlreadyEnrolled
         val activation = parseActivation(link) ?: return EnrollResult.NotAnActivationLink
+        if (store.load().any { it.isFor(activation.host, activation.userId) }) return EnrollResult.AlreadyEnrolled
+        val aliases = newAliases()
+        val result = enroll(activation, aliases, mode)
+        if (result !is EnrollResult.Enrolled) deleteKeys(aliases)
+        return result
+    }
+
+    private fun enroll(activation: Activation, aliases: KeyAliases, mode: UnlockMode): EnrollResult {
         val newKeys = try {
-            keys.create(activation.code.toByteArray(Charsets.UTF_8), mode)
+            keys.create(aliases, activation.code.toByteArray(Charsets.UTF_8), mode)
         } catch (e: Exception) {
             return EnrollResult.KeysUnavailable(e.message ?: e.javaClass.simpleName)
         }
@@ -139,8 +172,8 @@ class Enroller(
             is DeviceResponse.NetworkError -> EnrollResult.NetworkError(response.message)
             UpdateRequired -> UpdateRequired
             is DeviceResponse.Ok -> when (response.status) {
-                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode).let {
-                    if (store.save(it)) EnrollResult.Enrolled(it) else EnrollResult.NotSaved
+                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode, aliases).let {
+                    if (store.add(it)) EnrollResult.Enrolled(it) else EnrollResult.NotSaved
                 }
                 else -> EnrollResult.Rejected(response.status)
             }

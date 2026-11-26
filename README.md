@@ -20,18 +20,22 @@ unlock by scanning frict-server's QR code with the emulator's back camera
 TLS front answering 426 `app_update_required`, the app must show "Update
 Frict", which opens its Play listing. Then it removes the screen lock, which
 makes Keystore delete the `approval_key`; the app must say so and offer only
-"Remove this phone", which it does first with the server unreachable, where
+"Remove this account", which it does first with the server unreachable, where
 the app must offer "Remove anyway", then for real, after which the server must
 refuse `/auth` for the user. Before the scan it refuses the camera once and shows a QR code that is
 not an activation link; the camera must close when the app leaves the screen
 and once the link is scanned. Then a fingerprint is enrolled,
-the instrumented tests run, and `fingerprint` enrolls with "Fingerprint only",
-approves a login, denies one as "not me" with the fingerprint sensor and
-removes the phone anyway with the server unreachable. Both
-check that the server holds the app's Firebase Installation ID after
-enrollment and again after a restart; `fingerprint` also hands the app a
-login push through firebase-messaging's receiver, as Play services delivers
-it, and opens the app from its notification. It runs
+the instrumented tests run, and `fingerprint` enrolls two users of the same
+server: the first with "Fingerprint only", then, after the first user's link
+is refused as already there, an admin account with "Fingerprint or screen
+lock". It approves an admin login from a push handed to firebase-messaging's
+receiver, as Play services delivers it (the notification must name the admin
+account), denies a login of the first user and another as "not me", removes the
+first user (the admin must still approve, and the Firebase installation must
+stay), then removes the admin anyway with the server unreachable, which must
+delete the Firebase installation. Both check that the server holds the app's
+Firebase Installation ID for every account after enrollment and again after a
+restart. It runs
 frict-server at
 a pinned commit behind TLS from a throwaway CA on `127.0.0.1:443`, which the
 emulator reaches as `10.0.2.2`. Only the debug build trusts user-installed CAs, which is
@@ -85,6 +89,21 @@ GitHub raises no Dependabot alerts for Gradle, so CI's `vulnerabilities`
 (OSV-Scanner on the lockfile) and `codeql` jobs also run on `main` every
 Monday at 06:00 UTC.
 
+## Accounts
+
+The app holds several accounts, for example an operator's own and a separate
+admin account, on one server or several. Each is an independent enrollment
+on its server: its own host, user ID, unlock choice, and `device_key` and
+`approval_key` under their own Keystore aliases. The main screen lists them
+with their unlock choice; "Add an account" (or opening an activation link)
+enrolls another. A link for a user already on this phone, by host and user ID,
+is refused. Every pending request, notification and unlock prompt names the
+account it is for: the username the server sends with the request and the
+server's host. Removing an account, and a lost key, affect that account only.
+
+An enrollment saved by an app version with a single account becomes the first
+account on the first start, its keys kept where they are.
+
 ## Enrollment
 
 The app enrolls from an activation link
@@ -100,7 +119,7 @@ link, or when the scanner or the app leaves the screen. Frames stay in memory
 and nothing goes over the network. It creates the `device_key` and `approval_key`
 with the activation code as attestation challenge, sends the enroll request
 signed with the `device_key` with its Firebase Installation ID (FID), and saves
-the user once the server accepts it. A build without a Firebase project sends
+the account once the server accepts it, or deletes the new keys. A build without a Firebase project sends
 the placeholder FID `no-fid` and polls.
 
 Before enrolling, the user picks what unlocks the `approval_key`:
@@ -112,15 +131,17 @@ Before enrolling, the user picks what unlocks the `approval_key`:
 
 Keystore fixes a key's unlock when it creates it, so the choice is saved with
 the account (not a secret) and shown on the main screen; changing it means
-removing this phone and enrolling again, with a new activation code.
+removing the account and enrolling again, with a new activation code.
 
-"Remove this phone", after a confirmation, sends `/device/v1/remove` signed
-with the `device_key`, which deletes the enrollment on the server. On `200`, or
-`401` (already gone), it deletes the saved account, then both keys (kept if the
-account can't be deleted), and returns to the enrollment screen. If the server
-can't be reached or fails, the app says so and offers "Remove anyway", which
-removes the phone here only. An account saved before the choice existed shows
-"Fingerprint only", which is what its key requires.
+"Remove this account", after a confirmation naming the account, sends
+`/device/v1/remove` signed with its `device_key`, which deletes the enrollment
+on the server. On `200`, or `401` (already gone), it deletes the saved account,
+then its two keys (kept if the account can't be deleted). If the server can't
+be reached or fails, the app says so and offers "Remove anyway", which removes
+the account here only. Once the last account is gone, the app deletes its
+Firebase installation (`FirebaseInstallations.delete()`), so Firebase drops the
+FID, and returns to the enrollment screen. An account saved before the choice
+existed shows "Fingerprint only", which is what its key requires.
 
 "Fingerprint" is Android's strong (Class 3) biometric: a Class 3 face unlock
 works too. Removing the screen lock invalidates either key (Keystore deletes
@@ -130,8 +151,8 @@ and survives both.
 
 The app checks the `approval_key` each time it comes to the screen and before
 each answer, and the `device_key` on each signed request. When Keystore has
-lost either, the main screen says what happened and offers only "Remove this
-phone", the same server-first removal. Without the `device_key` the server
+lost either, that account says what happened and offers only "Remove this
+account", the same server-first removal. Without the `device_key` the server
 can't be told, so that ends in "Remove anyway".
 
 ## Minimum app version
@@ -142,31 +163,39 @@ client can send any number. If the server answers HTTP 426 with
 `{"error":"app_update_required","min_version":N}`, the app shows "Update
 Frict", whose button opens the app's Play listing, and does nothing else with
 that request: no answer is retried, nothing is removed or saved, and no
-"Remove anyway" is offered. Any other status is handled as before. A later
-successful poll hides the prompt.
+"Remove anyway" is offered. Any other status is handled as before. A 426 from
+any account's server shows the prompt; that server's next successful poll
+hides it.
 
 ## Push
 
 Only the debug build (`app.frict.android.dev`) has a `google-services.json`,
 for the dev Firebase project. A release build fails without
 `app/src/release/google-services.json`, which comes from the prod Firebase
-project (see [docs/release.md](docs/release.md)). On every start the app
-registers with FCM and sends its FID to `/device/v1/fid`, signed with the
-`device_key`; FCM's `onRegistered` sends a new one the same way.
+project (see [docs/release.md](docs/release.md)). The FID belongs to the app
+install, not an account: on every start with an account, the app registers
+with FCM and sends its FID to each account's `/device/v1/fid`, signed with that
+account's `device_key`; FCM's `onRegistered` sends a new one the same way.
 
-A push carries only a challenge ID. The app shows a high-priority
-notification for each (channel "Sign-in requests"), saying only that there is
-a sign-in request. It opens the app on its challenge, whose details the app fetches
-with the `device_key`. Polling stays: a missed push is found by the next poll.
-The app asks for the notification permission once enrolled.
+A push carries only a challenge ID, so the app asks each account's server for
+that challenge, signed with the account's `device_key`; a server returns a
+challenge only to the user it belongs to, so the first that returns it names
+the account. Nothing in the push picks the account, and a challenge no
+account's server returns gets no notification. (A local map from challenge to
+account, learned by polling, would miss pushes that arrive before any poll,
+which is when pushes matter.) The app shows a high-priority notification for
+each (channel "Sign-in requests") naming the account, which opens the app on
+the challenge. Polling stays: a missed push is found by the next poll. The app
+asks for the notification permission once it has an account.
 
 ## Approving a login
 
-While the app is open and enrolled, it polls `pending` at the server's
-`poll_interval`, signed with the `device_key`, and shows the oldest pending
-challenge's details (user, IP address, Authentik's pushinfo). Approve, Deny
+While the app is open, it polls each account's `pending`, signed with that
+account's `device_key`, at the shortest `poll_interval` the servers set, and
+shows each account's oldest pending challenge above the account list, with its
+details (account, IP address, Authentik's pushinfo). Approve, Deny
 (`cancel`) and Not me (`not_me`) each open a BiometricPrompt bound to a
-`Signature` over the `approval_key`, allowing what the key allows
+`Signature` over that account's `approval_key`, allowing what the key allows
 (`BIOMETRIC_STRONG`, plus `DEVICE_CREDENTIAL` for "Fingerprint or screen
 lock", which replaces the Back button: the platform forbids both). Keystore
 lets that key sign only after the prompt succeeds, and only the answer is

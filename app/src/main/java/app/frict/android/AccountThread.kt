@@ -9,6 +9,6 @@ val accountThread: ScheduledExecutorService = Executors.newSingleThreadScheduled
 fun approvals(account: Account) = Approvals(
     account = account,
     api = DeviceApi("https://${account.host}"),
-    deviceSigner = keystoreSigner(DEVICE_KEY_ALIAS),
+    deviceSigner = keystoreSigner(account.keys.device),
     unixSeconds = { System.currentTimeMillis() / 1000 },
 )

@@ -5,7 +5,6 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,7 +22,7 @@ class AppVersionTest {
             sign()
         }
     }
-    private val account = Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY)
+    private val account = testAccount(USER_ID)
     private val approvals = Approvals(account, DeviceApi(server.url), signer, { 1762345678L })
 
     init {
@@ -34,7 +33,7 @@ class AppVersionTest {
     fun close() = server.close()
 
     private fun enroller(store: AccountStore) =
-        Enroller(SoftwareKeyMaker(), store, { DeviceApi(server.url) }, { "fid-1" }, { 1762345678L })
+        Enroller(SoftwareKeyMaker(), {}, store, { DeviceApi(server.url) }, { "fid-1" }, { 1762345678L })
 
     @Test
     fun everyRequestCarriesTheVersionCode() {
@@ -99,8 +98,8 @@ class AppVersionTest {
         server.updateRequired = true
         val store = MemoryAccountStore(account)
         val deleted = mutableListOf<String>()
-        assertEquals(UpdateRequired, removePhone(approvals::remove, store, { deleted += "keys" }))
-        assertEquals(account, store.account)
+        assertEquals(UpdateRequired, removeAccount(account, approvals::remove, store, { deleted += "keys" }, { deleted += "installation" }))
+        assertEquals(listOf(account), store.accounts)
         assertEquals(emptyList<String>(), deleted)
     }
 
@@ -109,7 +108,7 @@ class AppVersionTest {
         server.updateRequired = true
         val store = MemoryAccountStore()
         assertEquals(UpdateRequired, enroller(store).enroll("frict://enroll?code=$CODE&host=h&user_id=$USER_ID", UnlockMode.FINGERPRINT_ONLY))
-        assertNull(store.account)
+        assertEquals(emptyList<Account>(), store.accounts)
     }
 
     @Test

@@ -11,8 +11,6 @@ import java.security.PrivateKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 
-const val DEVICE_KEY_ALIAS = "device_key"
-const val APPROVAL_KEY_ALIAS = "approval_key"
 private const val KEYSTORE = "AndroidKeyStore"
 
 /**
@@ -42,18 +40,18 @@ class EnrollmentKeys(
 )
 
 /**
- * Replaces both keys with new ones whose attestations carry [attestationChallenge]; [mode]
- * unlocks the approval_key.
+ * Makes both keys at [aliases], replacing any there, with attestations that carry
+ * [attestationChallenge]; [mode] unlocks the approval_key.
  */
 fun interface KeyMaker {
-    fun create(attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys
+    fun create(aliases: KeyAliases, attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys
 }
 
-fun deviceKeySpec(attestationChallenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec =
-    p256SigningSpec(DEVICE_KEY_ALIAS, attestationChallenge, strongBox).build()
+fun deviceKeySpec(alias: String, attestationChallenge: ByteArray, strongBox: Boolean): KeyGenParameterSpec =
+    p256SigningSpec(alias, attestationChallenge, strongBox).build()
 
-fun approvalKeySpec(attestationChallenge: ByteArray, strongBox: Boolean, mode: UnlockMode): KeyGenParameterSpec =
-    p256SigningSpec(APPROVAL_KEY_ALIAS, attestationChallenge, strongBox)
+fun approvalKeySpec(alias: String, attestationChallenge: ByteArray, strongBox: Boolean, mode: UnlockMode): KeyGenParameterSpec =
+    p256SigningSpec(alias, attestationChallenge, strongBox)
         .setUserAuthenticationRequired(true)
         .setUserAuthenticationParameters(0, mode.keyAuthTypes)
         .setInvalidatedByBiometricEnrollment(true)
@@ -68,17 +66,21 @@ private fun p256SigningSpec(alias: String, attestationChallenge: ByteArray, stro
 
 /** Android Keystore keys, in StrongBox when [hasStrongBox] and it has room, else in the TEE. */
 class KeystoreKeyMaker(private val hasStrongBox: Boolean) : KeyMaker {
-    override fun create(attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys {
-        generate(deviceKeySpec(attestationChallenge, hasStrongBox), deviceKeySpec(attestationChallenge, false))
-        generate(approvalKeySpec(attestationChallenge, hasStrongBox, mode), approvalKeySpec(attestationChallenge, false, mode))
+    override fun create(aliases: KeyAliases, attestationChallenge: ByteArray, mode: UnlockMode): EnrollmentKeys {
+        val (device, approval) = aliases
+        generate(deviceKeySpec(device, attestationChallenge, hasStrongBox), deviceKeySpec(device, attestationChallenge, false))
+        generate(
+            approvalKeySpec(approval, attestationChallenge, hasStrongBox, mode),
+            approvalKeySpec(approval, attestationChallenge, false, mode),
+        )
         val keys = keyStore()
         val chain = { alias: String -> keys.getCertificateChain(alias).map { it.encoded } }
         return EnrollmentKeys(
-            deviceKey = keys.getCertificate(DEVICE_KEY_ALIAS).publicKey.encoded,
-            approvalKey = keys.getCertificate(APPROVAL_KEY_ALIAS).publicKey.encoded,
-            deviceKeyAttestation = chain(DEVICE_KEY_ALIAS),
-            approvalKeyAttestation = chain(APPROVAL_KEY_ALIAS),
-            deviceSigner = keystoreSigner(DEVICE_KEY_ALIAS),
+            deviceKey = keys.getCertificate(device).publicKey.encoded,
+            approvalKey = keys.getCertificate(approval).publicKey.encoded,
+            deviceKeyAttestation = chain(device),
+            approvalKeyAttestation = chain(approval),
+            deviceSigner = keystoreSigner(device),
         )
     }
 
@@ -112,13 +114,13 @@ fun keystoreSigner(alias: String) = Signer { data ->
  * A Signature over the approval_key for a BiometricPrompt CryptoObject. Keystore lets it
  * sign once, and only after that prompt succeeds.
  */
-fun approvalSignature(): Signature = Signature.getInstance("SHA256withECDSA").apply {
-    initSignOrLost(APPROVAL_KEY_ALIAS, LostKey.APPROVAL_KEY)
+fun approvalSignature(alias: String): Signature = Signature.getInstance("SHA256withECDSA").apply {
+    initSignOrLost(alias, LostKey.APPROVAL_KEY)
 }
 
-/** The approval_key if Keystore lost it, else null; an unusable Keystore throws. */
-fun lostApprovalKey(): LostKey? = try {
-    approvalSignature()
+/** The approval_key at [alias] if Keystore lost it, else null; an unusable Keystore throws. */
+fun lostApprovalKey(alias: String): LostKey? = try {
+    approvalSignature(alias)
     null
 } catch (e: KeyLostException) {
     e.key
@@ -139,9 +141,9 @@ fun Signature.asSigner() = Signer { data ->
     sign()
 }
 
-fun deleteKeys() = keyStore().run {
-    deleteEntry(DEVICE_KEY_ALIAS)
-    deleteEntry(APPROVAL_KEY_ALIAS)
+fun deleteKeys(aliases: KeyAliases) = keyStore().run {
+    deleteEntry(aliases.device)
+    deleteEntry(aliases.approval)
 }
 
 private fun keyStore(): KeyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
