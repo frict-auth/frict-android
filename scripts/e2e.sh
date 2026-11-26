@@ -373,7 +373,8 @@ enroll() {
   echo "label suggested: $3 @ $API_HOST"
   if [[ $(label_of "$1") != "$3 @ $API_HOST" ]]; then
     tap_text "$3 @ $API_HOST"
-    adb shell input keyevent KEYCODE_MOVE_END $(printf 'KEYCODE_DEL %.0s' {1..64})
+    # Clears the field wherever the tap put the cursor.
+    adb shell input keyevent $(printf 'KEYCODE_DEL KEYCODE_FORWARD_DEL %.0s' {1..64})
     adb shell input text "$(label_of "$1" | sed 's/ /%s/g')"
     wait_for_text "$(label_of "$1")"
     echo "label edited to: $(label_of "$1")"
