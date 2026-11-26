@@ -26,8 +26,8 @@ const val EXTRA_USER_ID = "app.frict.android.USER_ID"
 /**
  * Wakes the app for a login push: a visible notification for each, which FCM expects of a
  * high-priority message. A push names a challenge and a user ID; only the server of the
- * account with that user ID is asked for the challenge ([pushedChallenge]), and the
- * notification shows what that server returns. A push for no account here is dropped.
+ * account with that user ID is asked for the challenge ([pushedChallenge]). A push for no
+ * account here is dropped.
  *
  * With firebase_messaging_installation_id_enabled, FCM calls onRegistered, never onNewToken.
  */
@@ -48,28 +48,36 @@ class FrictMessagingService : FirebaseMessagingService() {
             Log.i(TAG, "ignored a push: no account here has it pending")
             return
         }
-        notify(owned)
-    }
-
-    private fun notify(owned: OwnedChallenge) {
-        val challengeId = owned.challenge.id
-        val notifications = getSystemService(NotificationManager::class.java)
-        notifications.createNotificationChannel(NotificationChannel(LOGIN_CHANNEL, getString(R.string.channel_logins), NotificationManager.IMPORTANCE_HIGH))
-        val open = Intent(this, MainActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            .putExtra(EXTRA_CHALLENGE_ID, challengeId)
-            .putExtra(EXTRA_USER_ID, owned.account.userId)
-        val notification = Notification.Builder(this, LOGIN_CHANNEL)
-            .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle(getString(R.string.notify_login))
-            .setContentText(getString(R.string.request_account, owned.account.name))
-            .setCategory(Notification.CATEGORY_STATUS)
-            .setAutoCancel(true)
-            .setContentIntent(PendingIntent.getActivity(this, challengeId.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            .build()
-        notifications.notify(challengeId, 0, notification)
+        postSignInNotification(applicationContext, owned)
     }
 }
+
+/**
+ * Shows [owned] as a notification that opens the app on it. It names no account and no
+ * detail of the sign-in, locked or not: the app shows those once opened.
+ */
+fun postSignInNotification(context: Context, owned: OwnedChallenge) {
+    val challengeId = owned.challenge.id
+    val notifications = context.getSystemService(NotificationManager::class.java)
+    notifications.createNotificationChannel(NotificationChannel(LOGIN_CHANNEL, context.getString(R.string.channel_logins), NotificationManager.IMPORTANCE_HIGH))
+    val open = Intent(context, MainActivity::class.java)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        .putExtra(EXTRA_CHALLENGE_ID, challengeId)
+        .putExtra(EXTRA_USER_ID, owned.account.userId)
+    val notification = signInRequest(context)
+        .setVisibility(Notification.VISIBILITY_PRIVATE)
+        .setPublicVersion(signInRequest(context).build())
+        .setAutoCancel(true)
+        .setContentIntent(PendingIntent.getActivity(context, challengeId.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+        .build()
+    notifications.notify(challengeId, 0, notification)
+}
+
+private fun signInRequest(context: Context) = Notification.Builder(context, LOGIN_CHANNEL)
+    .setSmallIcon(R.drawable.ic_notification)
+    .setContentTitle(context.getString(R.string.notify_login))
+    .setContentText(context.getString(R.string.notify_login_text))
+    .setCategory(Notification.CATEGORY_STATUS)
 
 /** The "Sign-ins reported as not theirs" channel of app versions with alerts. */
 const val RETIRED_ALERT_CHANNEL = "alerts"
