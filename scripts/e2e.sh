@@ -70,7 +70,7 @@ case $MODE in
   fingerprint) MODE_LABEL="Fingerprint only" ;;
   *) echo "unknown mode $MODE; want screen-lock or fingerprint" >&2; exit 2 ;;
 esac
-FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-a59ea22ad0f9b106cf56e66493e83be7c217367a}
+FRICT_SERVER_COMMIT=${FRICT_SERVER_COMMIT:-2eb86104eb5207d1a2375c5b27bb0d818fed5357}
 DIAGNOSTICS_DIR=${DIAGNOSTICS_DIR:-$ROOT/app/build/emulator-diagnostics}
 : "${ANDROID_SERIAL:?set ANDROID_SERIAL to the booted emulator}"
 API_HOST=10.0.2.2
