@@ -41,9 +41,10 @@
 #    Then hands the app the push frict-server would send, through FCM's
 #    receiver as Play services delivers it, with made-up details beside the
 #    IDs. Only the admin may ask for the challenge (the TLS front logs each
-#    request's signing user ID); its notification must name the admin
-#    account by its label, open the app on the challenge with the server's
-#    details, never the push's, and Approve must reach /auth. Deny on the
+#    request's signing user ID); its notification must say only "Sign-in
+#    request", with no account label, user ID, username, IP or host, open the
+#    app on the challenge with the admin's label and the server's details,
+#    never the push's, and Approve must reach /auth. Deny on the
 #    first user's next login must reach its /auth.
 # 5. Not me: the first user's next login, denied with "Not me": /auth must
 #    return deny with status fraud, and the next /auth must be refused because
@@ -241,21 +242,34 @@ notification_extras() {
     ours && index($0, key) { sub(/.*android\.[a-z]+=String \(/, ""); sub(/\)$/, ""); print }'
 }
 
-# open_notification TITLE TEXT: waits for the app's notification titled TITLE
-# saying TEXT and taps it.
-open_notification() {
-  local i
+# notification_record: the app's notifications as dumpsys shows them unredacted.
+notification_record() {
+  adb shell dumpsys notification --noredact | tr -d '\r' | awk -v pkg="pkg=$PACKAGE " '
+    /NotificationRecord\(/ { ours = index($0, pkg) > 0 }
+    ours'
+}
+
+# open_login_notification DETAIL...: waits for the app's sign-in notification,
+# which must say only "Sign-in request" and show none of DETAIL, and taps it.
+open_login_notification() {
+  local i detail record
   for ((i = 0; i < 30; i++)); do
-    if grep -qxF "$1" <<<"$(notification_extras title)" && grep -qxF "$2" <<<"$(notification_extras text)"; then
-      echo "notification shown: $1: $2"
+    if grep -qxF "Sign-in request" <<<"$(notification_extras title)"; then
+      record=$(notification_record)
+      grep -qxF "Tap to approve or deny" <<<"$(notification_extras text)" ||
+        { echo "the sign-in notification says: $(notification_extras text)" >&2; return 1; }
+      for detail in "$@"; do
+        ! grep -qiF -- "$detail" <<<"$record" || { echo "the sign-in notification shows \"$detail\":" >&2; echo "$record" >&2; return 1; }
+      done
+      echo "notification shown, without the account or the sign-in's details"
       adb shell cmd statusbar expand-notifications
-      wait_for_text "$1"
-      tap_text "$1"
+      wait_for_text "Sign-in request"
+      tap_text "Sign-in request"
       return 0
     fi
     sleep 1
   done
-  echo "no notification \"$1: $2\" from $PACKAGE within 30s; it has: $(notification_extras title) $(notification_extras text)" >&2
+  echo "no sign-in notification from $PACKAGE within 30s; it has: $(notification_extras title) $(notification_extras text)" >&2
   return 1
 }
 
@@ -622,7 +636,7 @@ echo "a push for an unknown user: no request, no notification"
 
 push challenge_id="$challenge_id" user_id="$admin_id" username=mallory ipaddr=198.51.100.66
 echo "login push delivered"
-open_notification "Sign-in request" "For $admin_label"
+open_login_notification "$admin_label" "$admin_id" "$admin_username" 203.0.113.7 mallory 198.51.100.66 "$API_HOST"
 answer Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
 routed=$(signers /device/v1/challenge | tail -n +$((asked + 1)) | sort -u)

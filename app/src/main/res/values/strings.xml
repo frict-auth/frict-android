@@ -63,6 +63,7 @@
     <string name="not_removed">Could not remove the account from this phone.</string>
     <string name="channel_logins">Sign-in requests</string>
     <string name="notify_login">Sign-in request</string>
+    <string name="notify_login_text">Tap to approve or deny</string>
     <string name="key_lost_title">This account can\'t approve sign-ins</string>
     <string name="approval_key_lost_fingerprint_only">Android invalidated its approval key. With Fingerprint only, that happens when a fingerprint is added, all fingerprints are removed, or the screen lock is removed. Remove the account, then enroll again.</string>
     <string name="approval_key_lost_fingerprint_or_screen_lock">Android invalidated its approval key. With Fingerprint or screen lock, that happens when the screen lock is removed. Remove the account, then enroll again.</string>

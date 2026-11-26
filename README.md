@@ -29,8 +29,8 @@ the instrumented tests run, and `fingerprint` enrolls two users of the same
 server: the first with "Fingerprint only", then, after the first user's link
 is refused as already there, an admin account with "Fingerprint or screen
 lock". It approves an admin login from a push handed to firebase-messaging's
-receiver, as Play services delivers it (the notification must name the admin
-account), denies a login of the first user and another as "not me", removes the
+receiver, as Play services delivers it (the notification must be the generic
+"Sign-in request", naming neither the account nor the sign-in), denies a login of the first user and another as "not me", removes the
 first user (the admin must still approve, and the Firebase installation must
 stay), then removes the admin anyway with the server unreachable, which must
 delete the Firebase installation. Both check that the server holds the app's
@@ -97,8 +97,8 @@ on its server: its own host, user ID, unlock choice, label, and `device_key`
 and `approval_key` under their own Keystore aliases. The main screen lists them
 by label with their unlock choice; "Add an account" (or opening an activation
 link) enrolls another. A link for a user already on this phone, by host and
-user ID, is refused. Every pending request, notification and unlock prompt
-names the account it is for by its label. Removing an account, and a lost key,
+user ID, is refused. Every pending request and unlock prompt names the
+account it is for by its label; notifications never do. Removing an account, and a lost key,
 affect that account only.
 
 The label is set at enrollment: the app suggests `<username> @ <hostname>`,
@@ -190,7 +190,10 @@ of the account with that user ID for the challenge, signed with its
 A push whose user ID matches no account here (or more than one) makes no
 request and gets no notification, so no other server learns of the sign-in.
 The app shows a high-priority notification for each (channel "Sign-in
-requests") naming the account, which opens the app on the challenge. Polling stays: a missed push is found by the next poll. The app
+requests"), "Sign-in request: Tap to approve or deny", locked or not: no account label,
+host, username, IP or application. It is `VISIBILITY_PRIVATE` with a public
+version saying the same. Tapping it opens the app on the challenge, which shows
+the details. Polling stays: a missed push is found by the next poll. The app
 asks for the notification permission once it has an account.
 
 ## Approving a login
