@@ -35,5 +35,7 @@ class PrefsAccountStore(context: Context) : AccountStore {
 
     override fun remove(account: Account): Boolean = save(load() - account)
 
+    override fun replace(old: Account, new: Account): Boolean = save(load().map { if (it == old) new else it })
+
     private fun save(accounts: List<Account>) = prefs.edit().putString(KEY_ACCOUNTS, accountsToJson(accounts)).commit()
 }

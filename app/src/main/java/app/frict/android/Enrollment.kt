@@ -7,6 +7,7 @@ import java.net.URLDecoder
 import java.util.Base64
 import java.util.UUID
 import org.json.JSONArray
+import org.json.JSONException
 import org.json.JSONObject
 
 const val ENROLL_PATH = "/device/v1/enroll"
@@ -72,8 +73,12 @@ data class KeyAliases(val device: String, val approval: String) {
     }
 }
 
-/** One enrolled user: the API host that enrolled it, what unlocks its approval_key, and where its keys are. */
-data class Account(val host: String, val userId: String, val unlockMode: UnlockMode, val keys: KeyAliases) {
+/**
+ * One enrolled user: the API host that enrolled it, what unlocks its approval_key, where its
+ * keys are, and the label it is shown by, which stays on this phone. Accounts enrolled before
+ * labels have none.
+ */
+data class Account(val host: String, val userId: String, val unlockMode: UnlockMode, val keys: KeyAliases, val label: String? = null) {
     fun isFor(host: String, userId: String) = this.host.equals(host, ignoreCase = true) && this.userId == userId
 }
 
@@ -86,6 +91,9 @@ interface AccountStore {
 
     /** Returns false if the account could not be removed. */
     fun remove(account: Account): Boolean
+
+    /** Saves [new] in place of [old]; returns false if it could not be saved. */
+    fun replace(old: Account, new: Account): Boolean
 }
 
 /**
@@ -138,7 +146,8 @@ sealed interface EnrollResult {
 
 /**
  * Claims an activation for this device as a new account: new keys under new aliases, a
- * signed enroll request, and the account saved once the server accepts. The keys are
+ * signed enroll request, and the account saved once the server accepts, with its
+ * [defaultLabel]. The keys are
  * deleted again if it is not saved. Blocks; not thread-safe, so run it on one background
  * thread.
  */
@@ -172,13 +181,20 @@ class Enroller(
             is DeviceResponse.NetworkError -> EnrollResult.NetworkError(response.message)
             UpdateRequired -> UpdateRequired
             is DeviceResponse.Ok -> when (response.status) {
-                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode, aliases).let {
+                HttpURLConnection.HTTP_OK -> Account(activation.host, activation.userId, mode, aliases, defaultLabel(username(response.body), activation.host, activation.userId)).let {
                     if (store.add(it)) EnrollResult.Enrolled(it) else EnrollResult.NotSaved
                 }
                 else -> EnrollResult.Rejected(response.status)
             }
         }
     }
+}
+
+/** The username in an enroll reply, or empty if it has none. */
+private fun username(reply: String): String = try {
+    JSONObject(reply).optString("username")
+} catch (_: JSONException) {
+    ""
 }
 
 /**

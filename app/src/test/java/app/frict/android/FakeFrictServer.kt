@@ -24,8 +24,9 @@ enum class ChallengeState { PENDING, APPROVED, DENIED_CANCEL, DENIED_NOT_ME, EXP
  * with [addChallenge] and their state is in [challenges]. fid, signed with the device_key,
  * sets [fid]; remove, signed with the device_key, forgets both keys. [failWith] answers
  * every request with that status instead, and [updateRequired] with 426 app_update_required.
+ * The enroll reply carries [username], or no username if it is null, as older servers.
  */
-class FakeFrictServer(private val userId: String, private val code: String) : AutoCloseable {
+class FakeFrictServer(private val userId: String, private val code: String, private val username: String? = "alice") : AutoCloseable {
     val requests = CopyOnWriteArrayList<RecordedRequest>()
     val challenges = linkedMapOf<String, ChallengeState>()
     var pollInterval = 5
@@ -90,7 +91,7 @@ class FakeFrictServer(private val userId: String, private val code: String) : Au
     }
 
     private fun route(r: RecordedRequest): Pair<Int, String> = when (r.path) {
-        ENROLL_PATH -> if (acceptsEnroll(r)) 200 to "{}" else unauthorized
+        ENROLL_PATH -> if (acceptsEnroll(r)) 200 to JSONObject().apply { username?.let { put("username", it) } }.toString() else unauthorized
         PENDING_PATH -> when {
             !verifies(r, deviceKey) -> unauthorized
             r.json.length() != 0 -> badRequest
