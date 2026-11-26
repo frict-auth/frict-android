@@ -4,6 +4,12 @@ The Frict approver app: push 2FA for Authentik. Server, protocol and plan:
 [frict-server](https://github.com/frict-auth/frict-server) (`docs/PLAN.md`,
 `docs/device-protocol.md`).
 
+## Privacy policy
+
+The policy is at <https://privacy.frict.app/>. "Privacy policy", at the bottom
+of every screen, opens it in the browser. A fork sets its own in
+`PRIVACY_POLICY_URL` in `app/build.gradle.kts` (and in `PrivacyPolicyUrlTest`).
+
 ## Build and test
 
 Needs JDK 21 and an Android SDK in `ANDROID_HOME`.

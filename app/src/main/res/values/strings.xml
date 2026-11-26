@@ -70,5 +70,7 @@
     <string name="device_key_lost">Its device key is gone from this phone, so it can\'t check for sign-in requests or sign anything. Remove the account, then enroll again.</string>
     <string name="update_required">This version of Frict is too old for the server. Update it to approve sign-ins.</string>
     <string name="update_frict">Update Frict</string>
+    <string name="privacy_policy">Privacy policy</string>
+    <string name="no_browser">No app on this phone can open web pages. The privacy policy is at %1$s.</string>
     <string name="no_play_store">No app on this phone can open Google Play. Update Frict from Google Play.</string>
 </resources>
