@@ -95,6 +95,10 @@ class MainActivity : ComponentActivity() {
     /** Bumped on every resume and pause; a poll loop runs while its generation is current. */
     private val pollGeneration = AtomicInteger()
 
+    /** The generation whose poll loop is running, if any; only the account thread touches it. */
+    private var pollingGeneration: Int? = null
+    private var resumed = false
+
     private val store get() = PrefsAccountStore(applicationContext)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -126,9 +130,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        val generation = pollGeneration.incrementAndGet()
+        resumed = true
+        pollGeneration.incrementAndGet()
         accountThread.execute { checkApprovalKeys() }
-        accountThread.execute { poll(generation) }
+        startPolling()
+    }
+
+    /** Starts the poll loop of the current generation unless it is running. */
+    private fun startPolling() = accountThread.execute {
+        val generation = pollGeneration.get()
+        if (pollingGeneration == generation) return@execute
+        pollingGeneration = generation
+        poll(generation)
     }
 
     /** On the account thread: whether Keystore still holds a usable approval_key for each account. */
@@ -168,6 +181,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onPause() {
+        resumed = false
         pollGeneration.incrementAndGet()
         super.onPause()
     }
@@ -404,12 +418,20 @@ class MainActivity : ComponentActivity() {
         if (c == null) shownIds.remove(ui.account) else shownIds[ui.account] = c.id
     }
 
-    /** On the account thread: one poll of every account, then the next after the shortest interval a server set. */
+    /**
+     * On the account thread: one poll of every account, then the next after the shortest
+     * interval a server set. With no account the loop stops; enrolling starts it again.
+     */
     private fun poll(generation: Int) {
         if (generation != pollGeneration.get()) return
-        val polls = pollAll(store.load(), shownIds, ::approvals)
+        val saved = store.load()
+        if (saved.isEmpty()) {
+            pollingGeneration = null
+            return
+        }
+        val polls = pollAll(saved, shownIds, ::approvals)
         runOnUiThread { polls.forEach { (account, poll) -> apply(account, poll.update) } }
-        val next = polls.minOfOrNull { it.second.nextSeconds } ?: DEFAULT_POLL_SECONDS
+        val next = polls.minOf { it.second.nextSeconds }
         accountThread.schedule({ poll(generation) }, next, TimeUnit.SECONDS)
     }
 
@@ -549,6 +571,7 @@ class MainActivity : ComponentActivity() {
         status = null
         accounts.add(AccountUi(account))
         pushToAccounts()
+        if (resumed) startPolling()
     }
 
     private fun describe(result: EnrollResult): String = when (result) {

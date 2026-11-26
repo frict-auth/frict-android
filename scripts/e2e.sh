@@ -162,23 +162,33 @@ duo() {
 
 store() { E2E_DB=$work/data/frict.db "$work/store" "$@"; }
 
+# installation: the app's saved Firebase installation as "FID STATUS", "-" for
+# what it lacks. The file also holds the installation's tokens, so it goes
+# straight to python and never into a variable or the log.
+installation() {
+  adb shell "cat /data/data/$PACKAGE/no_backup/PersistedInstallation.*.json 2>/dev/null; true" | python3 -I -c 'import json, sys
+text = sys.stdin.read().strip()
+try:
+    p = json.loads(text) if text else {}
+except ValueError:
+    p = {}
+print(p.get("Fid") or "-", p.get("Status", "-"))'
+}
+
 # app_fid: the FID Firebase Installations saved for the app, once Firebase has
 # registered it.
 app_fid() {
-  local i json fid
+  local i fid status
   for ((i = 0; i < 60; i++)); do
-    json=$(adb shell "cat /data/data/$PACKAGE/no_backup/PersistedInstallation.*.json" 2>/dev/null) || json=
+    read -r fid status <<<"$(installation)"
     # Status 3 is REGISTERED in PersistedInstallation.RegistrationStatus.
-    if fid=$(python3 -I -c 'import json, sys
-p = json.loads(sys.argv[1])
-if p.get("Status") != 3: sys.exit(1)
-print(p["Fid"])' "$json" 2>/dev/null); then
+    if [[ $status == 3 && $fid != - ]]; then
       echo "$fid"
       return 0
     fi
     sleep 1
   done
-  echo "no Firebase-registered FID for $PACKAGE within 60s; its PersistedInstallation: ${json:-none}" >&2
+  echo "no Firebase-registered FID for $PACKAGE within 60s; FID $([[ $fid == - ]] && echo absent || echo present), status $status" >&2
   return 1
 }
 
@@ -526,20 +536,19 @@ installation_kept() {
 # installation, whose ID was FID: Firebase confirmed it, and FID is no longer
 # saved as registered.
 installation_deleted() {
-  local i log json status
+  local i log fid status
   for ((i = 0; i < 30; i++)); do
     log=$(adb logcat -d -s FrictPush:I)
     grep -qF "Firebase installation deleted" <<<"$log" && break
     sleep 1
   done
   grep -F "Firebase installation deleted" <<<"$log" || { echo "the app did not delete its Firebase installation; FrictPush log: $log" >&2; exit 1; }
-  json=$(adb shell "cat /data/data/$PACKAGE/no_backup/PersistedInstallation.*.json" 2>/dev/null) || json=
-  # The file holds the installation's tokens: print only whether FID is still registered.
-  status=$(python3 -I -c 'import json, sys
-p = json.loads(sys.argv[1] or "{}")
-print("registered" if p.get("Fid") == sys.argv[2] and p.get("Status") == 3 else "status %s" % p.get("Status"))' "$json" "$1")
-  [[ $status != registered ]] || { echo "the deleted FID is still saved as registered" >&2; exit 1; }
-  echo "the app's saved installation after deletion: $status"
+  read -r fid status <<<"$(installation)"
+  if [[ $fid == "$1" && $status == 3 ]]; then
+    echo "the deleted FID is still saved as registered" >&2
+    exit 1
+  fi
+  echo "the app's saved installation after deletion: status $status"
 }
 
 adb shell input keyevent KEYCODE_HOME
