@@ -56,31 +56,41 @@ class MultiAccountTest {
     private fun requests(e: Enrolled) = e.server.requests.map { it.path }
 
     @Test
-    fun aPushedChallengeIsAnsweredByTheAccountWhoseServerHasIt() {
+    fun aPushedChallengeIsFetchedOnlyFromItsAccountsServer() {
         admin.server.addChallenge(ADMIN_CHALLENGE, username = "admin")
-        val owned = findOwner(ADMIN_CHALLENGE, accounts, approvals)!!
+        val owned = pushedChallenge(LoginPush(ADMIN_CHALLENGE, ADMIN), accounts, approvals)!!
         assertEquals(admin.account, owned.account)
         assertEquals("admin", owned.challenge.username)
         val answered = approvals(owned.account).answer(ADMIN_CHALLENGE, Answer.APPROVE, signerOf(admin.approval))
         assertEquals(AnswerResult.Answered(Answer.APPROVE), answered)
         assertEquals(ChallengeState.APPROVED, admin.server.challenges[ADMIN_CHALLENGE])
-        assertEquals(listOf(CHALLENGE_PATH), requests(own))
+        assertEquals(emptyList<String>(), requests(own))
         assertEquals(listOf(CHALLENGE_PATH, ANSWER_PATH), requests(admin))
     }
 
     @Test
-    fun aChallengeNoAccountsServerHasIsDropped() {
-        assertNull(findOwner(OWN_CHALLENGE, accounts, approvals))
-        assertEquals(listOf(CHALLENGE_PATH), requests(own))
-        assertEquals(listOf(CHALLENGE_PATH), requests(admin))
+    fun aPushForAnUnknownUserMakesNoRequest() {
+        admin.server.addChallenge(ADMIN_CHALLENGE)
+        assertNull(pushedChallenge(LoginPush(ADMIN_CHALLENGE, "DU7777777777777777777777777A"), accounts, approvals))
+        assertEquals(emptyList<String>(), requests(own))
+        assertEquals(emptyList<String>(), requests(admin))
     }
 
     @Test
-    fun anAccountWithoutItsDeviceKeyDoesNotStopTheLookup() {
+    fun aChallengeItsAccountsServerLacksIsDroppedWithoutAskingOthers() {
         admin.server.addChallenge(ADMIN_CHALLENGE)
-        val lost = Approvals(own.account, DeviceApi(own.server.url), { throw KeyLostException(LostKey.DEVICE_KEY) }, { NOW })
-        val owned = findOwner(ADMIN_CHALLENGE, accounts) { if (it == own.account) lost else admin.approvals }
-        assertEquals(admin.account, owned?.account)
+        assertNull(pushedChallenge(LoginPush(ADMIN_CHALLENGE, OWN), accounts, approvals))
+        assertEquals(listOf(CHALLENGE_PATH), requests(own))
+        assertEquals(emptyList<String>(), requests(admin))
+    }
+
+    @Test
+    fun aUserIdOnTwoAccountsMakesNoRequest() {
+        admin.server.addChallenge(ADMIN_CHALLENGE)
+        val twin = admin.account.copy(host = "twin.frict.test")
+        assertNull(pushedChallenge(LoginPush(ADMIN_CHALLENGE, ADMIN), accounts + twin) { if (it == twin) admin.approvals else approvals(it) })
+        assertEquals(emptyList<String>(), requests(own))
+        assertEquals(emptyList<String>(), requests(admin))
     }
 
     @Test

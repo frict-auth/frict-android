@@ -177,15 +177,14 @@ install, not an account: on every start with an account, the app registers
 with FCM and sends its FID to each account's `/device/v1/fid`, signed with that
 account's `device_key`; FCM's `onRegistered` sends a new one the same way.
 
-A push carries only a challenge ID, so the app asks each account's server for
-that challenge, signed with the account's `device_key`; a server returns a
-challenge only to the user it belongs to, so the first that returns it names
-the account. Nothing in the push picks the account, and a challenge no
-account's server returns gets no notification. (A local map from challenge to
-account, learned by polling, would miss pushes that arrive before any poll,
-which is when pushes matter.) The app shows a high-priority notification for
-each (channel "Sign-in requests") naming the account, which opens the app on
-the challenge. Polling stays: a missed push is found by the next poll. The app
+A push carries a challenge ID and the user ID the server issued at
+enrollment, two random IDs, and nothing else. The app asks only the server
+of the account with that user ID for the challenge, signed with its
+`device_key`, and shows what the server returns, never the push's contents.
+A push whose user ID matches no account here (or more than one) makes no
+request and gets no notification, so no other server learns of the sign-in.
+The app shows a high-priority notification for each (channel "Sign-in
+requests") naming the account, which opens the app on the challenge. Polling stays: a missed push is found by the next poll. The app
 asks for the notification permission once it has an account.
 
 ## Approving a login

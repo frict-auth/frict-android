@@ -18,7 +18,7 @@ const val ENROLL_PATH = "/device/v1/enroll"
  */
 const val NO_FID = "no-fid"
 
-private val USER_ID = Regex("DU[A-Z2-7]{26}")
+val USER_ID = Regex("DU[A-Z2-7]{26}")
 private val HOST = Regex("[A-Za-z0-9.-]+(:[0-9]{1,5})?")
 
 /** An activation link's fields: `frict://enroll?code=…&host=…&user_id=…`, as the QR code encodes it. */

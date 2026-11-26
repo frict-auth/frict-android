@@ -34,12 +34,15 @@
 # 3. Accounts: the first user's link again must be refused; the admin's link
 #    adds a second account, both shown with their unlock modes, and the server
 #    must hold the app's FID for both users, again after the next start.
-# 4. Push: with the app in the background, starts an admin login and hands the
-#    app the push frict-server would send, through FCM's receiver as Play
-#    services delivers it, with made-up details beside the ID. Its notification
-#    must name the admin account, open the app on the challenge with the
-#    server's details, never the push's, and Approve must reach /auth. Deny on
-#    the first user's next login must reach its /auth.
+# 4. Push: with the app in the background, starts an admin login. A push
+#    naming a user ID no account has must make no request and show nothing.
+#    Then hands the app the push frict-server would send, through FCM's
+#    receiver as Play services delivers it, with made-up details beside the
+#    IDs. Only the admin may ask for the challenge (the TLS front logs each
+#    request's signing user ID); its notification must name the admin
+#    account, open the app on the challenge with the server's details, never
+#    the push's, and Approve must reach /auth. Deny on the first user's next
+#    login must reach its /auth.
 # 5. Not me: the first user's next login, denied with "Not me": /auth must
 #    return deny with status fraud, and the next /auth must be refused because
 #    the server paused pushes after the fraud report (FRICT_NOT_ME_COUNT=1).
@@ -120,8 +123,14 @@ openssl rand -hex 20 >"$secrets/duo-client-secret"
 # tls_conf LOCATION: the TLS front's config, whose location / does LOCATION.
 tls_conf() {
   cat >"$work/tls.conf" <<CONF
+map \$http_authorization \$frict_user {
+    "~^Frict-P256 (?<user>DU[A-Z2-7]{26}):" \$user;
+    default -;
+}
+log_format frict '\$uri \$frict_user \$status';
 server {
     listen 443 ssl;
+    access_log /dev/stdout frict;
     ssl_certificate     /secrets/frict.pem;
     ssl_certificate_key /secrets/frict.key;
     location / { $1 }
@@ -212,6 +221,11 @@ push() {
   for kv in "$@"; do args+=(--es "${kv%%=*}" "${kv#*=}"); done
   adb shell am broadcast -n "$PACKAGE/com.google.firebase.iid.FirebaseInstanceIdReceiver" \
     -a com.google.android.c2dm.intent.RECEIVE --es google.message_id "e2e-$RANDOM" "${args[@]}" >/dev/null
+}
+
+# signers PATH: the signing user ID of each request to PATH so far, in order.
+signers() {
+  docker logs "$NAME-tls" 2>/dev/null | awk -v path="$1" '$1 == path { print $2 }'
 }
 
 # notification_extras KEY: the KEY extra (title, text) of each of the app's notifications.
@@ -564,11 +578,29 @@ for ((i = 0; i < 30; i++)); do
   sleep 1
 done
 [[ -n $challenge_id ]] || { echo "no pending challenge for $admin_id within 30s" >&2; exit 1; }
-push challenge_id="$challenge_id" username=mallory ipaddr=198.51.100.66
+asked=$(signers /device/v1/challenge | wc -l)
+adb logcat -c
+push challenge_id="$challenge_id" user_id=DU77777777777777777777777777 username=mallory ipaddr=198.51.100.66
+for ((i = 0; i < 30; i++)); do
+  grep -qF "ignored a push" <<<"$(adb logcat -d -s FrictPush:I)" && break
+  sleep 1
+done
+grep -F "ignored a push" <<<"$(adb logcat -d -s FrictPush:I)" ||
+  { echo "the app did not drop a push for an unknown user within 30s" >&2; exit 1; }
+unknown=$(signers /device/v1/challenge | tail -n +$((asked + 1)))
+[[ -z $unknown ]] || { echo "a push for an unknown user made challenge requests as: $unknown" >&2; exit 1; }
+[[ -z $(notification_extras title) ]] || { echo "a push for an unknown user showed: $(notification_extras title)" >&2; exit 1; }
+echo "a push for an unknown user: no request, no notification"
+
+push challenge_id="$challenge_id" user_id="$admin_id" username=mallory ipaddr=198.51.100.66
 echo "login push delivered"
 open_notification "Sign-in request" "For $admin_username on $API_HOST"
 answer Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
+routed=$(signers /device/v1/challenge | tail -n +$((asked + 1)) | sort -u)
+[[ $routed == "$admin_id" ]] ||
+  { echo "challenge requests after the admin's push came from: $routed, want only $admin_id" >&2; exit 1; }
+echo "only the admin account asked for its pushed challenge"
 
 login Deny "Deny this sign-in" "deny deny:"
 wait_for_text "Denied."
