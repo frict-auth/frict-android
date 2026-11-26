@@ -200,12 +200,15 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** A login notification's challenge: shown on the account whose server has it. */
+    /** A login notification's challenge: shown on the account it names. */
     private fun takeChallenge(intent: Intent?) {
         val id = intent?.getStringExtra(EXTRA_CHALLENGE_ID) ?: return
+        val userId = intent.getStringExtra(EXTRA_USER_ID)
         intent.removeExtra(EXTRA_CHALLENGE_ID)
+        intent.removeExtra(EXTRA_USER_ID)
+        userId ?: return
         accountThread.execute {
-            val owned = findOwner(id, store.load(), ::approvals) ?: return@execute
+            val owned = pushedChallenge(LoginPush(id, userId), store.load(), ::approvals) ?: return@execute
             runOnUiThread { apply(owned.account, PollUpdate.Show(owned.challenge)) }
         }
     }
