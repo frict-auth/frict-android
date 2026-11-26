@@ -21,12 +21,13 @@ private const val LOGIN_CHANNEL = "logins"
 private const val FID_TIMEOUT_SECONDS = 30L
 
 const val EXTRA_CHALLENGE_ID = "app.frict.android.CHALLENGE_ID"
+const val EXTRA_USER_ID = "app.frict.android.USER_ID"
 
 /**
  * Wakes the app for a login push: a visible notification for each, which FCM expects of a
- * high-priority message. A push names only a challenge ID, so the notification names the
- * account whose server returns that challenge to it ([findOwner]); a challenge no account
- * owns is dropped.
+ * high-priority message. A push names a challenge and a user ID; only the server of the
+ * account with that user ID is asked for the challenge ([pushedChallenge]), and the
+ * notification shows what that server returns. A push for no account here is dropped.
  *
  * With firebase_messaging_installation_id_enabled, FCM calls onRegistered, never onNewToken.
  */
@@ -35,16 +36,16 @@ class FrictMessagingService : FirebaseMessagingService() {
     override fun onRegistered(installationId: String) = sendFid(applicationContext, installationId)
 
     override fun onMessageReceived(message: RemoteMessage) {
-        val id = parsePush(message.data)
-        if (id == null) {
+        val push = parsePush(message.data)
+        if (push == null) {
             Log.w(TAG, "ignored a push with data keys ${message.data.keys}")
             return
         }
         val owned = accountThread.submit<OwnedChallenge?> {
-            findOwner(id, PrefsAccountStore(applicationContext).load(), ::approvals)
+            pushedChallenge(push, PrefsAccountStore(applicationContext).load(), ::approvals)
         }.get()
         if (owned == null) {
-            Log.i(TAG, "ignored a push: no account's server has its challenge")
+            Log.i(TAG, "ignored a push: no account here has it pending")
             return
         }
         notify(owned)
@@ -57,6 +58,7 @@ class FrictMessagingService : FirebaseMessagingService() {
         val open = Intent(this, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             .putExtra(EXTRA_CHALLENGE_ID, challengeId)
+            .putExtra(EXTRA_USER_ID, owned.account.userId)
         val notification = Notification.Builder(this, LOGIN_CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.notify_login))
