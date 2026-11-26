@@ -9,7 +9,7 @@ private const val USER_ID = "DUABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 class KeyLossTest {
     private val server = FakeFrictServer(USER_ID, "unused")
-    private val account = Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY)
+    private val account = testAccount(USER_ID)
     private val noDeviceKey = Approvals(account, DeviceApi(server.url), { throw KeyLostException(LostKey.DEVICE_KEY) }, { 1762345678L })
 
     @After
@@ -32,9 +32,9 @@ class KeyLossTest {
         val deleted = mutableListOf<String>()
         assertEquals(
             RemoveResult.ServerNotTold("the device_key is gone"),
-            removePhone(noDeviceKey::remove, store, { deleted += "keys" }),
+            removeAccount(account, noDeviceKey::remove, store, { deleted += "keys" }, { deleted += "installation" }),
         )
-        assertEquals(account, store.account)
+        assertEquals(listOf(account), store.accounts)
         assertEquals(emptyList<String>(), deleted)
     }
 

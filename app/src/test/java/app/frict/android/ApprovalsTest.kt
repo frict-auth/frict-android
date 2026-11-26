@@ -43,7 +43,7 @@ class ApprovalsTest {
     private val server = FakeFrictServer(USER_ID, "unused")
     private val device = p256()
     private val approval = p256()
-    private val approvals = Approvals(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY), DeviceApi(server.url), signerOf(device), { NOW })
+    private val approvals = Approvals(testAccount(USER_ID), DeviceApi(server.url), signerOf(device), { NOW })
 
     init {
         server.enrolled(device.public, approval.public)
@@ -245,7 +245,7 @@ class ApprovalsTest {
 
     @Test
     fun removalThatCannotSignIsNotTold() {
-        val noKey = Approvals(Account("api.frict.test", USER_ID, UnlockMode.FINGERPRINT_ONLY), DeviceApi(server.url), { error("no device_key") }, { NOW })
+        val noKey = Approvals(testAccount(USER_ID), DeviceApi(server.url), { error("no device_key") }, { NOW })
         assertEquals(ServerRemoval.NotTold("no device_key"), noKey.remove())
         assertEquals(emptyList<RecordedRequest>(), server.requests.toList())
     }

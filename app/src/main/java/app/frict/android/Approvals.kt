@@ -26,6 +26,9 @@ data class Challenge(
     val expires: Long,
 )
 
+/** Who [account]'s server says this sign-in is for, or the account's user ID if it says nothing. */
+fun Challenge.accountName(account: Account) = username.ifEmpty { account.userId }
+
 /** The three answers `/device/v1/answer` accepts. */
 enum class Answer(val decision: String, val reason: String?) {
     APPROVE("approve", null),
@@ -168,6 +171,10 @@ class Approvals(
         return api.post(path, body, authorization(signer, account.userId, unixSeconds(), path, body))
     }
 }
+
+/** One poll of every account, given the ID of the challenge each shows, if any. */
+fun pollAll(accounts: List<Account>, shownIds: Map<Account, String>, approvals: (Account) -> Approvals): List<Pair<Account, Poll>> =
+    accounts.map { it to approvals(it).poll(shownIds[it]) }
 
 private fun parsePending(r: DeviceResponse.Ok): Pair<List<String>, Long>? = try {
     val json = JSONObject(r.body)
