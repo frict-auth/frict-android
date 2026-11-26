@@ -437,11 +437,16 @@ login Approve "Approve this sign-in" "allow allow:"
 wait_for_text "Approved."
 
 # start_removal USER_ID: confirms "Remove this account" on the first account
-# listed, which must be USER_ID's.
+# listed, which must be USER_ID's. A poll error can appear and move the button
+# between the dump and the tap, so a tap that opens no dialog is retried.
 start_removal() {
-  grep -qF 'text="Remove this account"' <<<"$(ui_dump)" || scroll_down
-  tap_text "Remove this account"
-  wait_for_text "Remove $1 on $API_HOST?"
+  local i
+  for ((i = 0; i < 3; i++)); do
+    grep -qF 'text="Remove this account"' <<<"$(ui_dump)" || scroll_down
+    tap_text "Remove this account"
+    wait_for_text "Remove $1 on $API_HOST?" 5 2>/dev/null && break
+  done
+  wait_for_text "Remove $1 on $API_HOST?" 5
   tap_text Remove
 }
 
